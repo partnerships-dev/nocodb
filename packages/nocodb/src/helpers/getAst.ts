@@ -1,11 +1,5 @@
 import {
-  isCreatedOrLastModifiedByCol,
-  isCreatedOrLastModifiedTimeCol,
-  isDeletedCol,
-  isHiddenCol,
-  isLinksOrLTAR,
   isOrderCol,
-  isSystemColumn,
   NcApiVersion,
   parseProp,
   RelationTypes,
@@ -38,15 +32,17 @@ import { MetaTable } from '~/cli';
 import { NcError } from '~/helpers/catchError';
 import RowColorCondition from '~/models/RowColorCondition';
 import Noco from '~/Noco';
+import {
+  type Ast,
+  type AstResult,
+  type ColumnAstContext,
+  resolveColumnAst,
+} from '~/helpers/getAstColumnStrategy';
 
 const logger = new Logger('getAst');
 
 // Cap on recursive nested-LTAR expansion. See `_depth` param doc on getAst.
 const GET_AST_MAX_DEPTH = 8;
-
-type Ast = {
-  [key: string]: 1 | true | null | Ast;
-};
 
 const getAst = async (
   context: NcContext,
@@ -71,6 +67,7 @@ const getAst = async (
     includeButtonFilterColumns = false,
     skipSubstitutingColumnIds = false,
     fk_display_value_column_id,
+    allowRequestedHiddenFields = false,
     _depth = 0,
   }: {
     query?: RequestQuery;
@@ -90,6 +87,9 @@ const getAst = async (
     includeButtonFilterColumns?: boolean;
     skipSubstitutingColumnIds?: boolean;
     fk_display_value_column_id?: string | null;
+    // Return requested fields even if view-hidden. Opt-in; authenticated
+    // link-picker paths only (see ColumnAstContext doc).
+    allowRequestedHiddenFields?: boolean;
     // Internal: recursion depth for nested LTAR expansion. Bounded to
     // GET_AST_MAX_DEPTH (8) to prevent client-controlled `?nested[a][nested]
     // [b][nested]…` payloads or cyclic LTAR/Lookup metadata from blowing
@@ -280,6 +280,12 @@ const getAst = async (
     fields = null;
   }
 
+  // This `allowedCols` gate (keyed on view-column `show`) omits view-hidden
+  // columns from the default RESPONSE PAYLOAD only. That is intended and is a
+  // separate concern from query-level filtering: hidden columns stay fully
+  // queryable via where/sort/filter (field visibility is the real ACL, not
+  // view `show`). Do not extend this into query-param sanitization — see the
+  // DESIGN NOTE in services/public-datas.service.ts.
   let allowedCols = null;
   if (view) {
     allowedCols = (await View.getColumns(context, view.id)).reduce(
@@ -309,7 +315,24 @@ const getAst = async (
 
   const columns = model.columns;
 
-  const ast: Ast = {};
+  // Collected with the broad strategy-result type; narrowed to `Ast` on return.
+  const ast: Record<string, AstResult> = {};
+
+  // Shared inputs for the per-column strategy chain (see getAstColumnStrategy).
+  const astCtx: ColumnAstContext = {
+    model,
+    view,
+    apiVersion,
+    getHiddenColumn,
+    extractOrderColumn,
+    includePkByDefault,
+    fields,
+    allowedCols,
+    rowColoringColumnIds,
+    buttonFilterColumnIds,
+    dependencyFieldsForRangeView,
+    allowRequestedHiddenFields,
+  };
 
   for (const col of columns) {
     let value: number | boolean | { [key: string]: any } = 1;
@@ -418,90 +441,22 @@ const getAst = async (
         })
       ).ast;
     }
-    let isRequested;
-
-    const isInFields =
-      fields?.length && (fields.includes(col.title) || fields.includes(col.id));
-    const isSortOrFilterColumn =
+    const isInFields = !!(
+      fields?.length &&
+      (fields.includes(col.title) || fields.includes(col.id))
+    );
+    const isSortOrFilterColumn = !!(
       includeSortAndFilterColumns &&
-      (sortColumnIds.includes(col.id) || filterColumnIds.includes(col.id));
-    // exclude row meta column
-    if (col.uidt === UITypes.Meta) {
-      isRequested = false;
-    } else if (isSortOrFilterColumn) {
-      // For LTAR columns with a custom display value override, `value` holds
-      // the nested AST that tells the query builder to include that override
-      // column. Without an override, the legacy `true` is correct (pk + pv).
-      // Lookup columns keep the scalar `1` — the EE query clients widen it
-      // when the looked-up column is an LTAR with an override.
-      isRequested = value;
-    } else if (
-      rowColoringColumnIds.has(col.id) ||
-      buttonFilterColumnIds.has(col.id)
-    ) {
-      isRequested = true;
-    } else if (col.pk && apiVersion === NcApiVersion.V3) {
-      isRequested = true;
-    }
-    // exclude system column and foreign key from API response for v3
-    // but always keep PK columns — they are needed for id/id_fields
-    else if (
-      col.system &&
-      !col.pk &&
-      ![UITypes.CreatedTime, UITypes.LastModifiedTime].includes(col.uidt) &&
-      apiVersion === NcApiVersion.V3
-    ) {
-      isRequested = false;
-    } else if (isCreatedOrLastModifiedByCol(col) && col.system) {
-      isRequested = false;
-    } else if (isOrderCol(col) && col.system) {
-      isRequested = extractOrderColumn || getHiddenColumn;
-    } else if (isDeletedCol(col) && col.system) {
-      isRequested = false;
-    } else if (getHiddenColumn) {
-      const isVisibleNonHiddenColumn =
-        (!view || !!view?.show_system_fields) && !isHiddenCol(col, model);
-      const isCreatedOrLastModifiedSystemCol =
-        isCreatedOrLastModifiedTimeCol(col) && col.system;
-      // include non-has-many system links (self-link); has-many is part of
-      // the mm relation and isn't needed on its own
-      const isNonHasManySystemLink =
-        isLinksOrLTAR(col) &&
-        col.system &&
-        [
-          RelationTypes.BELONGS_TO,
-          RelationTypes.MANY_TO_MANY,
-          RelationTypes.ONE_TO_ONE,
-        ].includes(
-          (col.colOptions as LinkToAnotherRecordColumn)?.type as RelationTypes,
-        );
+      (sortColumnIds.includes(col.id) || filterColumnIds.includes(col.id))
+    );
 
-      const shouldIncludeColumn =
-        !isSystemColumn(col) ||
-        isVisibleNonHiddenColumn ||
-        isCreatedOrLastModifiedSystemCol ||
-        isNonHasManySystemLink ||
-        col.pk;
-
-      isRequested = shouldIncludeColumn && value;
-    } else if (allowedCols && (!includePkByDefault || !col.pk)) {
-      isRequested =
-        allowedCols[col.id] &&
-        (!isSystemColumn(col) ||
-          (!view && isCreatedOrLastModifiedTimeCol(col)) ||
-          view.show_system_fields ||
-          (dependencyFieldsForRangeView ?? []).includes(col.id) ||
-          col.pv) &&
-        (!fields?.length || isInFields) &&
-        value;
-    } else if (fields?.length) {
-      // For APIv3, always extract primary key dependencies even if not explicitly requested
-      // This is needed because APIv3 always returns the primary key as 'id' at root level
-      isRequested =
-        (isInFields && value) || (apiVersion === NcApiVersion.V3 && col.pk);
-    } else {
-      isRequested = value;
-    }
+    // Decide inclusion via the ordered strategy chain (first match wins).
+    const isRequested = resolveColumnAst(astCtx, {
+      col,
+      value,
+      isInFields,
+      isSortOrFilterColumn,
+    });
 
     if (isRequested || col.pk)
       await extractDependencies(context, col, dependencyFields);
@@ -509,7 +464,9 @@ const getAst = async (
     ast[getFieldKey(col)] = isRequested;
   }
 
-  return { ast, dependencyFields, parsedQuery: dependencyFields };
+  // Narrow back to `Ast`: falsy entries are runtime-only "not requested" markers
+  // that `nocoExecute` ignores; the exposed shape stays `1 | true | null | Ast`.
+  return { ast: ast as Ast, dependencyFields, parsedQuery: dependencyFields };
 };
 
 const getViewRowColorFields = async (params: {
@@ -665,7 +622,8 @@ const extractLookupDependencies = async (
     dependencyFields.nested[relationColumn.title] || {};
   const nestedDependencyFields = dependencyFields.nested[relationColumn.title];
   nestedDependencyFields.nested = nestedDependencyFields.nested || {};
-  nestedDependencyFields.fieldsSet = nestedDependencyFields.fieldsSet || new Set();
+  nestedDependencyFields.fieldsSet =
+    nestedDependencyFields.fieldsSet || new Set();
 
   await extractDependencies(
     refContext,

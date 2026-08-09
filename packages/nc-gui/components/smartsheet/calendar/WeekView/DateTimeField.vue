@@ -2,7 +2,7 @@
 import dayjs from 'dayjs'
 import type { Row } from '~/lib/types'
 
-const emits = defineEmits(['expandRecord', 'newRecord'])
+const emits = defineEmits(['expandRecord', 'newRecord', 'recordContextMenu'])
 
 const {
   selectedDateRange,
@@ -17,10 +17,27 @@ const {
   updateFormat,
   timezoneDayjs,
   isSyncedFromColumn,
+  isAddDeleteInlineEnabled,
   activeCalendarView,
   isDayAnchoredMode,
   dayAnchoredSpan,
 } = useCalendarViewStoreOrThrow()
+
+// Interface editor: an hour cell / dblclick selects the calendar element (opens
+// `Page › Calendar`) instead of selecting the hour or adding a record. Null in
+// the published view and outside interface pages.
+const interfaceEditSelect = inject(InterfaceVizEditSelectInj, ref<(() => void) | null>(null))
+
+// Range (date) columns are already conveyed by the block's time + position, so
+// they're excluded from the card body — keeps it a clean title line by default.
+const rangeFieldIds = computed(() => {
+  const ids = new Set<string>()
+  for (const r of calendarRange.value || []) {
+    if (r.fk_from_col?.id) ids.add(r.fk_from_col.id)
+    if (r.fk_to_col?.id) ids.add(r.fk_to_col.id)
+  }
+  return ids
+})
 
 const { isSyncedTable } = useSmartsheetStoreOrThrow()
 
@@ -35,6 +52,13 @@ const { width: containerWidth } = useElementSize(container)
 const isPublic = inject(IsPublicInj, ref(false))
 
 const { isUIAllowed } = useRoles()
+
+// Interface pages provide ReadonlyInj when the viz's edit_inline opt-in is
+// OFF — event drag/resize must honor it like grid cells do. Plain data-app
+// trees never provide it (fallback false → behavior unchanged).
+const isCalendarCellReadonly = inject(ReadonlyInj, ref(false))
+
+const canEditCalendarData = computed(() => isUIAllowed('dataEdit') && !isCalendarCellReadonly.value)
 
 const meta = inject(MetaInj, ref())
 
@@ -255,96 +279,6 @@ const getGridTimeSlots = (from: dayjs.Dayjs, to: dayjs.Dayjs) => ({
   dayIndex: getDayIndex(from),
 })
 
-const hasSlotForRecord = (
-  columnArray: Row[],
-  dates: {
-    fromDate: dayjs.Dayjs
-    toDate: dayjs.Dayjs
-  },
-) => {
-  const { fromDate, toDate } = dates
-
-  if (!fromDate || !toDate) return false
-
-  for (const column of columnArray) {
-    const columnFromCol = column.rowMeta.range?.fk_from_col
-    const columnToCol = column.rowMeta.range?.fk_to_col
-
-    if (!columnFromCol) return false
-
-    const { startDate: columnFromDate, endDate: columnToDate } = calculateNewDates({
-      startDate: timezoneDayjs.timezonize(column.row[columnFromCol.title!]),
-      endDate:
-        columnToCol && dayjs(column.row[columnToCol.title!])?.isValid()
-          ? timezoneDayjs.timezonize(column.row[columnToCol.title!])
-          : timezoneDayjs.timezonize(column.row[columnFromCol.title!]).add(1, 'hour').subtract(1, 'minute'),
-      scheduleStart: timezoneDayjs.dayjsTz(selectedDateRange.value.start).startOf('day'),
-      scheduleEnd: timezoneDayjs.dayjsTz(selectedDateRange.value.end).endOf('day'),
-    })
-
-    if (
-      fromDate.isBetween(columnFromDate, columnToDate, null, '[]') ||
-      toDate.isBetween(columnFromDate, columnToDate, null, '[]')
-    ) {
-      return false
-    }
-  }
-  return true
-}
-
-const getMaxOverlaps = ({
-  row,
-  columnArray,
-  graph,
-}: {
-  row: Row
-  columnArray: Array<Array<Array<Row>>>
-  graph: Map<string, Set<string>>
-}) => {
-  const id = row.rowMeta.id as string
-
-  const visited: Set<string> = new Set()
-
-  const dayIndex = row.rowMeta.dayIndex
-  const overlapIndex = columnArray[dayIndex].findIndex((column) => column.findIndex((r) => r.rowMeta.id === id) !== -1) + 1
-  // Walk the whole connected overlap component to fully populate `visited`; maxOverlaps below
-  // is then the component's column count (max overLapIteration). Every record in the cluster
-  // must resolve to the SAME denominator, so we must NOT early-exit the traversal — doing so
-  // (the old `>= columnArray.length` short-circuit) left `visited` partial, giving co-overlapping
-  // cards different width/left grids and overlapping them. (Mirrors DayView's union-find cluster.)
-  const dfs = (id: string): number => {
-    visited.add(id)
-    let maxOverlaps = 1
-    const neighbors = graph.get(id)
-    if (neighbors) {
-      for (const neighbor of neighbors) {
-        if (!visited.has(neighbor)) {
-          maxOverlaps = Math.min(Math.max(maxOverlaps, dfs(neighbor) + 1), columnArray[dayIndex].length)
-        }
-      }
-    }
-
-    return maxOverlaps
-  }
-
-  let maxOverlaps = 1
-  if (graph.has(id)) {
-    dfs(id)
-  }
-  const overlapIterations: Array<number> = []
-
-  columnArray[dayIndex]
-    .flat()
-    .filter((record) => visited.has(record.rowMeta.id!))
-    .forEach((record) => {
-      overlapIterations.push(record.rowMeta.overLapIteration!)
-    })
-
-  maxOverlaps = overlapIterations?.length > 0 ? Math.max(...overlapIterations) : 1
-
-  return { maxOverlaps, dayIndex, overlapIndex }
-}
-
 const resizeInProgress = ref(false)
 
 const dragTimeout = ref<ReturnType<typeof setTimeout>>()
@@ -361,23 +295,12 @@ const dragRecord = ref<Row | null>(null)
 
 const recordsAcrossAllRange = computed<{
   records: Array<Row>
-  gridTimeMap: Map<
-    number,
-    Map<
-      number,
-      {
-        count: number
-        id: string[]
-      }
-    >
-  >
   spanningRecords: Row[]
   denseBands: Array<{ dayIndex: number; top: number; height: number; count: number; maxOverlaps: number; maxHeight: number }>
 }>(() => {
   if (!formattedData.value || !calendarRange.value || !container.value || !scrollContainer.value)
     return {
       records: [],
-      gridTimeMap: new Map(),
       spanningRecords: [],
       denseBands: [],
     }
@@ -390,17 +313,6 @@ const recordsAcrossAllRange = computed<{
     scheduleEnd = scheduleEnd.subtract(2, 'day')
   }
 
-  const columnArray: Array<Array<Array<Row>>> = [[[]]]
-  const gridTimeMap = new Map<
-    number,
-    Map<
-      number,
-      {
-        count: number
-        id: string[]
-      }
-    >
-  >()
   const recordsToDisplay: Array<Row> = []
   const recordSpanningDays: Array<Row> = []
 
@@ -528,11 +440,18 @@ const recordsAcrossAllRange = computed<{
       return timezoneDayjs.timezonize(a.row[fromColA.title!]).isBefore(timezoneDayjs.timezonize(b.row[fromColB.title!])) ? -1 : 1
     })
 
+    // Assign overlap columns per day via a sweep-line (O(N log N)): sort by start, pack each record
+    // into the lowest free column (overLapIteration); a gap closes an overlap cluster; every record
+    // in a connected cluster gets the SAME denominator (numberOfOverlaps = the cluster's column
+    // count). Integer-only — replaces the previous per-minute gridTimeMap + dayjs O(N^2) column scan
+    // + id-pair graph + DFS, which froze the tab on dense days.
+    const intervalsByDay = new Map<number, Array<{ record: Row; from: number; to: number }>>()
     for (const record of recordsToDisplay) {
       const fromCol = record.rowMeta.range?.fk_from_col
       const toCol = record.rowMeta.range?.fk_to_col
 
       if (!fromCol) continue
+
       const { startDate, endDate } = calculateNewDates({
         startDate: timezoneDayjs.timezonize(record.row[fromCol.title!]),
         endDate:
@@ -544,100 +463,59 @@ const recordsAcrossAllRange = computed<{
       })
 
       const gridTimes = getGridTimeSlots(startDate, endDate)
-
       const dayIndex = record.rowMeta.dayIndex ?? gridTimes.dayIndex
 
-      for (let gridCounter = gridTimes.from; gridCounter <= gridTimes.to; gridCounter++) {
-        if (!gridTimeMap.has(dayIndex)) {
-          gridTimeMap.set(
-            dayIndex,
-            new Map<
-              number,
-              {
-                count: number
-                id: string[]
-              }
-            >(),
-          )
-        }
-
-        if (!gridTimeMap.get(dayIndex)?.has(gridCounter)) {
-          gridTimeMap.set(dayIndex, (gridTimeMap.get(dayIndex) ?? new Map()).set(gridCounter, { count: 0, id: [] }))
-        }
-
-        const idArray = gridTimeMap.get(dayIndex)!.get(gridCounter)!.id
-        idArray.push(record.rowMeta.id!)
-        const count = gridTimeMap.get(dayIndex)!.get(gridCounter)!.count + 1
-
-        gridTimeMap.set(
-          dayIndex,
-          (gridTimeMap.get(dayIndex) ?? new Map()).set(gridCounter, {
-            count,
-            id: idArray,
-          }),
-        )
-      }
-
-      let foundAColumn = false
-
-      if (!columnArray[dayIndex]) {
-        columnArray[dayIndex] = []
-      }
-
-      for (const column in columnArray[dayIndex]) {
-        if (hasSlotForRecord(columnArray[dayIndex][column], { fromDate: startDate, toDate: endDate })) {
-          columnArray[dayIndex][column].push(record)
-          foundAColumn = true
-          break
-        }
-      }
-
-      if (!foundAColumn) {
-        columnArray[dayIndex].push([record])
-      }
+      if (!intervalsByDay.has(dayIndex)) intervalsByDay.set(dayIndex, [])
+      intervalsByDay.get(dayIndex)!.push({ record, from: gridTimes.from, to: gridTimes.to })
     }
 
-    const graph: Map<number, Map<string, Set<string>>> = new Map()
+    for (const dayIntervals of intervalsByDay.values()) {
+      dayIntervals.sort((a, b) => a.from - b.from || a.to - b.to)
 
-    for (const dayIndex of gridTimeMap.keys()) {
-      if (!graph.has(dayIndex)) {
-        graph.set(dayIndex, new Map())
+      const columnsEnd: number[] = [] // columnsEnd[i] = last occupied slot of column i in the current cluster
+      let clusterEnd = -Infinity
+      let clusterMembers: Row[] = []
+
+      const flushCluster = () => {
+        const denom = columnsEnd.length || 1
+        for (const rec of clusterMembers) rec.rowMeta.numberOfOverlaps = denom
       }
-      for (const [_gridTime, { id: ids }] of gridTimeMap.get(dayIndex)) {
-        for (const id1 of ids) {
-          if (!graph.get(dayIndex).has(id1)) {
-            graph.get(dayIndex).set(id1, new Set())
-          }
-          for (const id2 of ids) {
-            if (id1 !== id2) {
-              if (!graph.get(dayIndex).get(id1).has(id2)) {
-                graph.get(dayIndex).get(id1).add(id2)
-              }
-            }
+
+      for (const { record, from, to } of dayIntervals) {
+        // A gap (this record starts after every open column has ended) closes the current cluster.
+        if (from > clusterEnd) {
+          flushCluster()
+          columnsEnd.length = 0
+          clusterMembers = []
+          clusterEnd = -Infinity
+        }
+
+        // Reuse the lowest-indexed column that has freed up; otherwise open a new one.
+        let col = -1
+        for (let i = 0; i < columnsEnd.length; i++) {
+          if (columnsEnd[i] < from) {
+            col = i
+            break
           }
         }
+        if (col === -1) {
+          col = columnsEnd.length
+          columnsEnd.push(to)
+        } else {
+          columnsEnd[col] = to
+        }
+
+        record.rowMeta.overLapIteration = col + 1
+        clusterMembers.push(record)
+        clusterEnd = Math.max(clusterEnd, to)
       }
+      flushCluster()
     }
 
-    for (const dayIndex in columnArray) {
-      for (const columnIndex in columnArray[dayIndex]) {
-        for (const record of columnArray[dayIndex][columnIndex]) {
-          record.rowMeta.overLapIteration = parseInt(columnIndex) + 1
-        }
-      }
-    }
     for (const record of recordsToDisplay) {
-      const {
-        maxOverlaps,
-        overlapIndex,
-        dayIndex: tDayIndex,
-      } = getMaxOverlaps({
-        row: record,
-        columnArray,
-        graph: graph.get(record.rowMeta.dayIndex!) ?? new Map(),
-      })
-
-      const dayIndex = record.rowMeta.dayIndex ?? tDayIndex
+      const maxOverlaps = record.rowMeta.numberOfOverlaps ?? 1
+      const overlapIndex = record.rowMeta.overLapIteration ?? 1
+      const dayIndex = record.rowMeta.dayIndex ?? 0
 
       let display = 'block'
 
@@ -646,8 +524,6 @@ const recordsAcrossAllRange = computed<{
           display = 'none'
         }
       }
-
-      record.rowMeta.numberOfOverlaps = maxOverlaps
 
       let width = 0
       let left = 100
@@ -733,7 +609,6 @@ const recordsAcrossAllRange = computed<{
 
   return {
     records: recordsToDisplay,
-    gridTimeMap,
     spanningRecords: recordSpanningDays,
     denseBands,
   }
@@ -744,7 +619,7 @@ const useDebouncedRowUpdate = useDebounceFn((row: Row, updateProperty: string[],
 }, 500)
 
 const onResize = (event: MouseEvent) => {
-  if (!isUIAllowed('dataEdit') || !container.value || !resizeRecord.value || !scrollContainer.value) return
+  if (!canEditCalendarData.value || !container.value || !resizeRecord.value || !scrollContainer.value) return
   if (resizeRecord.value.rowMeta.range?.is_readonly) return
 
   const { width, left, top, bottom } = container.value.getBoundingClientRect()
@@ -829,7 +704,8 @@ const onResizeEnd = () => {
 }
 
 const onResizeStart = (direction: 'right' | 'left', event: MouseEvent, record: Row) => {
-  if (!isUIAllowed('dataEdit')) return
+  if (event.button !== 0) return
+  if (!canEditCalendarData.value) return
 
   if (record.rowMeta.range?.is_readonly) return
 
@@ -936,7 +812,7 @@ const calculateNewRow = (
 }
 
 const onDrag = (event: MouseEvent) => {
-  if (!isUIAllowed('dataEdit') || !scrollContainer.value || !dragRecord.value) return
+  if (!canEditCalendarData.value || !scrollContainer.value || !dragRecord.value) return
 
   const containerRect = scrollContainer.value.getBoundingClientRect()
   const scrollBottomThreshold = 20
@@ -951,7 +827,7 @@ const onDrag = (event: MouseEvent) => {
 }
 
 const stopDrag = (event: MouseEvent) => {
-  if (!isUIAllowed('dataEdit') || !isDragging.value || !container.value || !dragRecord.value) return
+  if (!canEditCalendarData.value || !isDragging.value || !container.value || !dragRecord.value) return
 
   event.preventDefault()
   clearTimeout(dragTimeout.value!)
@@ -971,6 +847,8 @@ const stopDrag = (event: MouseEvent) => {
 }
 
 const dragStart = (event: MouseEvent, record: Row) => {
+  // Right/middle-click never drags — it opens the record context menu (or the browser's).
+  if (event.button !== 0) return
   if (resizeInProgress.value) return
   let target = event.target as HTMLElement
 
@@ -978,7 +856,7 @@ const dragStart = (event: MouseEvent, record: Row) => {
 
   // Drag-to-reschedule is gated to editable, non-synced ranges; click-to-expand
   // (onMouseUp below) must work regardless so synced records can be opened.
-  const canDrag = isUIAllowed('dataEdit') && !isSyncedFromColumn.value && !record.rowMeta.range?.is_readonly
+  const canDrag = canEditCalendarData.value && !isSyncedFromColumn.value && !record.rowMeta.range?.is_readonly
 
   if (canDrag) {
     dragTimeout.value = setTimeout(() => {
@@ -1007,7 +885,7 @@ const dragStart = (event: MouseEvent, record: Row) => {
 }
 
 const dropEvent = (event: DragEvent) => {
-  if (!isUIAllowed('dataEdit') || !container.value) return
+  if (!canEditCalendarData.value || !container.value) return
   event.preventDefault()
 
   const data = event.dataTransfer?.getData('text/plain')
@@ -1069,9 +947,19 @@ const openDayViewForColumn = (dayIndex: number) => {
   if (date) openDayView(date)
 }
 
+// Single-click an hour cell — selects the hour, or (interface editor) selects the
+// calendar element.
+const selectHour = (hour: dayjs.Dayjs) => {
+  if (interfaceEditSelect.value) return interfaceEditSelect.value()
+  selectedDate.value = hour
+  selectedTime.value = hour
+  dragRecord.value = null
+}
+
 // TODO: Add Support for multiple ranges when multiple ranges are supported
 const addRecord = (date: dayjs.Dayjs) => {
-  if (!isUIAllowed('dataEdit') || !calendarRange.value || isSyncedTable.value) return
+  if (interfaceEditSelect.value) return interfaceEditSelect.value()
+  if (!isUIAllowed('dataEdit') || !isAddDeleteInlineEnabled.value || !calendarRange.value || isSyncedTable.value) return
   const fromCol = calendarRange.value[0]?.fk_from_col
   if (!fromCol) return
   const newRecord = {
@@ -1095,6 +983,10 @@ watch(
 
 const expandRecord = (record: Row) => {
   emits('expandRecord', record)
+}
+
+function onRecordContextMenu(event: MouseEvent, record: Row) {
+  emits('recordContextMenu', event, record)
 }
 
 const spanningRecordsContainer = ref<HTMLElement | null>(null)
@@ -1177,6 +1069,7 @@ watch(
         ref="spanningRecordsContainer"
         :records="recordsAcrossAllRange.spanningRecords"
         @expand-record="expandRecord"
+        @record-context-menu="onRecordContextMenu"
       />
     </div>
     <div
@@ -1208,13 +1101,7 @@ watch(
           class="text-center relative transition h-13 text-sm text-nc-content-gray-muted w-full py-1 border-transparent border-1 border-x-nc-border-gray-light border-t-nc-border-gray-light border-l-nc-border-gray-light"
           data-testid="nc-calendar-week-hour"
           @dblclick="addRecord(hour)"
-          @click="
-            () => {
-              selectedDate = hour
-              selectedTime = hour
-              dragRecord = null
-            }
-          "
+          @click="selectHour(hour)"
         ></div>
       </div>
 
@@ -1238,6 +1125,7 @@ watch(
             }"
             class="absolute transition draggable-record group cursor-pointer pointer-events-auto"
             @mousedown.stop="dragStart($event, record)"
+            @contextmenu="onRecordContextMenu($event, record)"
             @mouseleave="hoverRecord = null"
             @mouseover="hoverRecord = record.rowMeta.id"
             @dragover.prevent
@@ -1247,16 +1135,17 @@ watch(
                 :hover="hoverRecord === record.rowMeta.id"
                 :position="record.rowMeta!.position"
                 :dragging="record.rowMeta.id === dragRecord?.rowMeta?.id || resizeRecord?.rowMeta.id === record.rowMeta.id"
-                :resize="!!record.rowMeta.range?.fk_to_col && isUIAllowed('dataEdit')"
+                :resize="!!record.rowMeta.range?.fk_to_col && canEditCalendarData"
                 :record="record"
                 :selected="record.rowMeta!.id === dragRecord?.rowMeta?.id"
                 :clamp-lines="cardClampLines(record)"
+                :blank="isCardTooThinToRender(record)"
                 @resize-start="onResizeStart"
               >
                 <template v-if="!isCardTooThinToRender(record)">
                   <template v-for="(field, id) in fields" :key="id">
                     <LazySmartsheetPlainCell
-                      v-if="!isRowEmpty(record, field!)"
+                      v-if="!isRowEmpty(record, field!) && !rangeFieldIds.has(field!.id)"
                       v-model="record.row[field!.title!]"
                       class="text-xs"
                       :column="field"
@@ -1270,13 +1159,13 @@ watch(
                   <SmartsheetRecordFieldsTooltip :record="record" :fields="fields" />
                 </template>
                 <template #time>
-                  <div v-if="!isCardTooThinToRender(record)" class="text-xs font-medium text-nc-content-gray-disabled">
+                  <span v-if="!isCardTooThinToRender(record)" class="text-xs font-medium text-nc-content-gray-disabled">
                     {{
                       timezoneDayjs
                         .timezonize(record.row[record.rowMeta.range?.fk_from_col!.title!])
                         .format(is12hrTimeColumn(record.rowMeta.range?.fk_from_col) ? 'h:mm a' : 'HH:mm')
                     }}
-                  </div>
+                  </span>
                 </template>
               </LazySmartsheetCalendarVRecordCard>
             </LazySmartsheetRow>

@@ -10,7 +10,11 @@ import {
   TestConnectionError,
   UnprocessableEntity,
 } from '../error/nc-base.error';
-import { NcErrorType, PlanLimitExceededDetailsType } from '../globals';
+import {
+  CreditsExhaustedDetailsType,
+  NcErrorType,
+  PlanLimitExceededDetailsType,
+} from '../globals';
 import {
   HigherPlan,
   PlanFeatureTypes,
@@ -44,6 +48,13 @@ export class NcErrorBase {
 
   workspaceNotFound(id: string, args?: NcErrorArgs): never {
     throw this.errorCodex.generateError(NcErrorType.ERR_WORKSPACE_NOT_FOUND, {
+      params: id,
+      ...args,
+    });
+  }
+
+  orgNotFound(id: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(NcErrorType.ERR_ORG_NOT_FOUND, {
       params: id,
       ...args,
     });
@@ -96,6 +107,37 @@ export class NcErrorBase {
       params: id,
       ...args,
     });
+  }
+
+  interfaceNotFound(id: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(NcErrorType.ERR_INTERFACE_NOT_FOUND, {
+      params: id,
+      ...args,
+    });
+  }
+
+  interfacePageNotFound(id: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(
+      NcErrorType.ERR_INTERFACE_PAGE_NOT_FOUND,
+      {
+        params: id,
+        ...args,
+      }
+    );
+  }
+
+  /**
+   * Write op attempted while previewing an interface as another USER — the
+   * dedicated type lets the UI tell "you are previewing" apart from a real
+   * permission denial.
+   */
+  interfacePreviewWriteBlocked(args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(
+      NcErrorType.ERR_INTERFACE_PREVIEW_WRITE_BLOCKED,
+      {
+        ...args,
+      }
+    );
   }
 
   chatSessionNotFound(id: string, args?: NcErrorArgs): never {
@@ -362,6 +404,15 @@ export class NcErrorBase {
     );
   }
 
+  invalidSharedInterfacePagePassword(args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(
+      NcErrorType.ERR_SHARED_INTERFACE_PAGE_PASSWORD_INVALID,
+      {
+        ...args,
+      }
+    );
+  }
+
   invalidAttachmentJson(payload: string, args?: NcErrorArgs): never {
     throw this.errorCodex.generateError(
       NcErrorType.ERR_INVALID_ATTACHMENT_JSON,
@@ -539,6 +590,23 @@ export class NcErrorBase {
         ...details,
         ...(details?.plan ? { higherPlan: HigherPlan[details.plan] } : {}),
       },
+    });
+  }
+
+  creditPackNotFound(id: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(NcErrorType.ERR_CREDIT_PACK_NOT_FOUND, {
+      params: id,
+      ...args,
+    });
+  }
+
+  creditsExhausted(
+    details?: CreditsExhaustedDetailsType,
+    args?: NcErrorArgs
+  ): never {
+    throw this.errorCodex.generateError(NcErrorType.ERR_CREDITS_EXHAUSTED, {
+      ...args,
+      details,
     });
   }
 
@@ -1113,5 +1181,12 @@ export class NcErrorBase {
         ...args,
       }
     );
+  }
+
+  snapshotBlocked(message?: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(NcErrorType.ERR_SNAPSHOT_BLOCKED, {
+      params: message || '',
+      ...args,
+    });
   }
 }

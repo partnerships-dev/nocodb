@@ -251,6 +251,22 @@ const openNewRecordFormHook = inject(OpenNewRecordFormHookInj, createEventHook()
 const isPublicView = inject(IsPublicInj, ref(false))
 const isLocked = inject(IsLockedInj, ref(false))
 
+// Present when the grid is hosted on an interface page (synthetic view) —
+// data flows through the adapter and there is no `viewId` route param.
+const interfacePageDataApi = inject(InterfacePageDataInj, undefined)
+
+// Interface grids: the active-cell overlay respects the viz row-height
+// appearance — chips-style LTAR cells wrap/cap to the row height instead of
+// growing multi-line (which pushed their select chevron and the link-picker
+// dropdown below the cell). The data app keeps its expand-to-show-all-chips
+// overlay (no provide there → cells stay uncapped).
+if (interfacePageDataApi) {
+  provide(
+    RowHeightInj,
+    computed(() => (rowHeightEnum.value ?? 1) as 1 | 2 | 4 | 6),
+  )
+}
+
 // Composables
 const { height, width } = useElementSize(wrapperRef)
 const { height: windowHeight, width: windowWidth } = useWindowSize()
@@ -278,6 +294,14 @@ const { tryShowTooltip, hideTooltip } = tooltipStore
 let selectedRowInfo: { index: number | null | undefined; isSelectionStarted: boolean; path: Array<number> } = {
   index: null,
   isSelectionStarted: false,
+  path: [],
+}
+
+// Persistent anchor for Shift+Click range selection. Unlike `selectedRowInfo` (reset on mouseUp as
+// part of the drag lifecycle), this survives across clicks so a later Shift+Click can extend the
+// range from the last plainly-clicked row.
+let shiftSelectAnchor: { index: number | null | undefined; path: Array<number> } = {
+  index: null,
   path: [],
 }
 
@@ -371,6 +395,7 @@ const {
   totalColumnsWidth,
 
   isFieldEditAllowed,
+  interfaceActiveHeaderFieldId,
   isContextMenuAllowed,
   isDataEditAllowed,
   removeInlineAddRecord,
@@ -681,10 +706,19 @@ const totalHeight = computed(() => {
           }
           // 1 Px Offset is Added for Showing the activeBorders. Else it wont be visible
           sum += 1
-        } else if (group?.groups) {
+        } else {
+          // Non-leaf (nested) group: reserve its sub-group HEADER band from the
+          // already-known `groupCount` immediately — mirroring the leaf branch
+          // above using the known row `count`. Previously this was gated behind
+          // `group.groups` (the child map), so an expanded outer group added no
+          // height until its sub-groups had been fetched async — the spacer
+          // never grew on expand when that fetch was slow/not-yet-triggered.
           sum += (group?.groupCount ?? 0) * (GROUP_HEADER_HEIGHT + GROUP_PADDING)
-          // Do nested groups check
-          sum += estimateTotalHeight(group.groups)
+          // Add the loaded sub-groups' own expanded contents (rows / deeper
+          // sub-groups) once the child map is present.
+          if (group?.groups) {
+            sum += estimateTotalHeight(group.groups)
+          }
         }
       }
     }
@@ -699,7 +733,11 @@ const isContextMenuOpen = computed({
     if (
       (selectedRows.value.length && isDataReadOnly.value) ||
       isDropdownVisible.value ||
-      (contextMenuTarget.value === null && !selectedRows.value.length && !vSelectedAllRecords.value)
+      (contextMenuTarget.value === null && !selectedRows.value.length && !vSelectedAllRecords.value) ||
+      // Interface pages with add/delete inline off have no bulk action for a
+      // multi-record selection — suppress the menu rather than fall back to
+      // single-record actions that would ambiguously target one row.
+      (!!interfacePageDataApi && !interfacePageDataApi.canAddDeleteInline.value && selectedRows.value.length > 1)
     ) {
       return false
     }
@@ -722,12 +760,22 @@ function resetRowSelection() {
 
   vSelectedAllRecords.value = false
   vSelectedAllRecordsSkipPks.value = {}
+  shiftSelectAnchor = { index: null, path: [] }
 }
 
 function clearHeaderSelection() {
-  if (selectedHeaderColumnIds.value.size === 0 && lastHeaderClickedColumnId.value === null) return
+  if (
+    selectedHeaderColumnIds.value.size === 0 &&
+    lastHeaderClickedColumnId.value === null &&
+    interfaceActiveHeaderFieldId.value === null
+  ) {
+    return
+  }
   selectedHeaderColumnIds.value = new Set()
   lastHeaderClickedColumnId.value = null
+  interfaceActiveHeaderFieldId.value = null
+  // Deselecting the header hides its Field pane (Escape / right-click reset).
+  interfacePageDataApi?.closeFieldPane?.()
   triggerRefreshCanvas()
 }
 
@@ -1143,6 +1191,36 @@ const handleRowMetaClick = ({
         resetActiveCell()
 
         if (onlyDrag) {
+          const path = generateGroupPath(group)
+
+          // Shift+Click selects the contiguous range from the persistent anchor (the last plainly
+          // clicked row) to the clicked row, reusing the same range logic as drag-select instead of
+          // toggling a single row.
+          const canShiftSelectRange =
+            e.shiftKey &&
+            ncIsNumber(shiftSelectAnchor.index) &&
+            ncIsNumber(row.rowMeta.rowIndex) &&
+            (isGroupBy.value ? comparePath(shiftSelectAnchor.path, path) : true)
+
+          if (canShiftSelectRange) {
+            const selectionStart = Math.min(shiftSelectAnchor.index!, row.rowMeta.rowIndex!)
+            const selectionEnd = Math.min(
+              selectionStart + (MAX_SELECTED_ROWS - 1),
+              Math.max(shiftSelectAnchor.index!, row.rowMeta.rowIndex!),
+            )
+
+            // Only currently-cached rows in the range are toggled; rows outside the cache window
+            // (large un-loaded gaps) are skipped, matching the drag-select behaviour.
+            getDataCache(path)?.cachedRows.value.forEach((cachedRow) => {
+              if (!ncIsNumber(cachedRow.rowMeta.rowIndex)) return
+              cachedRow.rowMeta.selected =
+                cachedRow.rowMeta.rowIndex >= selectionStart && cachedRow.rowMeta.rowIndex <= selectionEnd
+            })
+
+            // Keep the anchor fixed so repeated shift-clicks re-extend from the same origin.
+            break
+          }
+
           row.rowMeta.selected = !row.rowMeta?.selected
 
           if (vSelectedAllRecords.value && isValidValue(row.rowMeta.rowIndex)) {
@@ -1153,7 +1231,11 @@ const handleRowMetaClick = ({
             }
           }
 
-          const path = generateGroupPath(group)
+          // Remember the last plainly-clicked row as the anchor for a subsequent Shift+Click.
+          if (ncIsNumber(row.rowMeta.rowIndex)) {
+            shiftSelectAnchor = { index: row.rowMeta.rowIndex, path }
+          }
+
           if (row.rowMeta?.selected && ncIsNumber(row.rowMeta.rowIndex)) {
             selectedRowInfo = {
               index: row.rowMeta.rowIndex,
@@ -1573,7 +1655,7 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
 
       // If user is clicking on an existing column
       const { column: clickedColumn, xOffset } = findClickedColumn(x, scrollLeft.value)
-      const isFieldNotEditable = !isUIAllowed('fieldEdit')
+      const isFieldNotEditable = !isUIAllowed('fieldEdit') || !isFieldEditAllowed.value
 
       if (clickedColumn) {
         const clickedColumnId = clickedColumn.columnObj?.id as string | undefined
@@ -1588,13 +1670,18 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
             clearHeaderSelection()
           }
 
+          // AFTER the clear — clearHeaderSelection resets the active field too
+          if (interfacePageDataApi && clickedColumnId) {
+            interfaceActiveHeaderFieldId.value = clickedColumnId
+          }
+
           openColumnDropdownField.value = clickedColumn.columnObj
           lastOpenColumnDropdownField.value = clickedColumn.columnObj
           isDropdownVisible.value = true
           overlayStyle.value = {
             top: `${rect.top}px`,
-            left: `${rect.left + xOffset}px`,
-            width: `${clickedColumn.width}`,
+            left: `${rect.left + (interfacePageDataApi ? xOffset + parseCellWidth(clickedColumn.width) - 8 - 22 : xOffset)}px`,
+            width: interfacePageDataApi ? '22px' : `${parseCellWidth(clickedColumn.width)}px`,
             height: `${headerRowHeight.value}px`,
             position: 'fixed',
           }
@@ -1603,8 +1690,9 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
         } else {
           const rightPadding = 8
           const columnWidth = parseCellWidth(clickedColumn.width)
+          const triggerWidth = interfacePageDataApi ? 22 : 14
           let rightOffset = xOffset + columnWidth - rightPadding
-          rightOffset -= 16
+          rightOffset -= interfacePageDataApi ? 22 : 16
           // TODO: remove this once the issue is fixed
           // Groupby columns have a 13px for the fixed column
           if (groupByColumns.value?.length === 1 && clickedColumn.fixed) {
@@ -1614,8 +1702,18 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
           const iconOffsetX = rightOffset
 
           // check if clicked on the column menu icon
-          if (iconOffsetX <= x && iconOffsetX + 14 >= x) {
+          if (iconOffsetX <= x && iconOffsetX + triggerWidth >= x) {
             if (isFieldNotEditable) return
+
+            // Interface: the 3-dot button exists only on the ACTIVE header —
+            // a click in its zone on an inactive column activates it first.
+            // Ring and Field pane move together, same as a plain header click.
+            if (interfacePageDataApi && clickedColumnId && interfaceActiveHeaderFieldId.value !== clickedColumnId) {
+              interfaceActiveHeaderFieldId.value = clickedColumnId
+              interfacePageDataApi.openFieldPane?.(clickedColumnId)
+              triggerRefreshCanvas()
+              return
+            }
 
             // if menu already in open state then close it on second click
             if (prevMenuState.isDropdownVisible && prevMenuState.openColumnDropdownField === clickedColumn.columnObj) {
@@ -1630,8 +1728,9 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
 
             overlayStyle.value = {
               top: `${rect.top}px`,
-              left: `${rect.left + xOffset}px`,
-              width: `${clickedColumn.width}`,
+              // Interface: the menu hangs off the 3-dot button, not the column
+              left: `${rect.left + (interfacePageDataApi ? iconOffsetX : xOffset)}px`,
+              width: interfacePageDataApi ? `${triggerWidth}px` : `${parseCellWidth(clickedColumn.width)}px`,
               height: `${headerRowHeight.value}px`,
               position: 'fixed',
             }
@@ -1656,6 +1755,14 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
 
             activeCell.value = { row: -1, column: -1, path: activeCell.value?.path ?? [] }
 
+            triggerRefreshCanvas()
+            return
+          } else if (interfacePageDataApi && isFieldEditAllowed.value && clickedColumnId) {
+            // Interface builder: a header click marks the field active (blue
+            // border + 3-dot button) and opens its Field pane in the properties
+            // panel — it must NOT select the column's cells.
+            interfaceActiveHeaderFieldId.value = clickedColumnId
+            interfacePageDataApi.openFieldPane?.(clickedColumnId)
             triggerRefreshCanvas()
             return
           } else if (!isGroupBy.value && x < xOffset + columnWidth - 20 - (clickedColumn.columnObj?.description ? 24 : 0)) {
@@ -1718,7 +1825,7 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
   // would wipe the user's intent right after they used it to drive a
   // multi-column resize. The canvas mouseup fires before useColumnResize's
   // window-level cleanup, so `isResizing` is still true here.
-  if (selectedHeaderColumnIds.value.size > 0 && !isResizing.value) {
+  if ((selectedHeaderColumnIds.value.size > 0 || interfaceActiveHeaderFieldId.value) && !isResizing.value) {
     clearHeaderSelection()
   }
 
@@ -1756,7 +1863,7 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
       overlayStyle.value = {
         top: `${rect.top + height.value - 36}px`,
         left: `${rect.left + xOffset}px`,
-        width: clickedColumn.width,
+        width: `${parseCellWidth(clickedColumn.width)}px`,
         height: `36px`,
         position: 'fixed',
       }
@@ -1834,7 +1941,7 @@ async function handleMouseUp(e: MouseEvent, _elementMap: CanvasElement) {
         overlayStyle.value = {
           top: `${rect.top + y - 36}px`,
           left: `${rect.left + xOffset}px`,
-          width: clickedColumn.width,
+          width: `${parseCellWidth(clickedColumn.width)}px`,
           height: `36px`,
           position: 'fixed',
         }
@@ -2067,7 +2174,8 @@ const getHeaderTooltipRegions = (
     let tooltipText: string
 
     if (column.uidt) {
-      totalIconWidth += 26
+      // Interface headers draw no type icon — the title starts at the padding
+      totalIconWidth += interfacePageDataApi ? 8 : 26
       tooltipText = getCustomColumnTooltip({
         column,
         metas: metas.value,
@@ -2113,10 +2221,14 @@ const getHeaderTooltipRegions = (
       return
     }
 
-    if (isFieldEditAllowed.value && (!column.columnObj?.readonly || isAutoGeneratedColumn(column.columnObj))) {
+    if (
+      isFieldEditAllowed.value &&
+      (!column.columnObj?.readonly || isAutoGeneratedColumn(column.columnObj)) &&
+      (!interfacePageDataApi || (column.columnObj?.id && interfaceActiveHeaderFieldId.value === column.columnObj.id))
+    ) {
       regions.push({
-        x: rightOffset - scrollLeftValue,
-        width: 14,
+        x: rightOffset - scrollLeftValue - (interfacePageDataApi ? 6 : 0),
+        width: interfacePageDataApi ? 22 : 14,
         type: 'columnChevron',
         disableTooltip: true,
         text: null,
@@ -2677,7 +2789,29 @@ function addEmptyColumn(columnOrderData: Pick<ColumnReqType, 'column_order'> | n
   }
 }
 
+/** Interface header menu — Edit field rides the standard edit-column flow. */
+function onInterfaceEditField(e: MouseEvent) {
+  const column = openColumnDropdownField.value
+  if (!column) return
+
+  handleEditColumn(e, false, column)
+}
+
+/** Interface header menu — Hide field writes the viz's visible fields via the adapter. */
+function onInterfaceHideField() {
+  const column = openColumnDropdownField.value
+
+  if (column?.id) interfacePageDataApi?.hideField?.(column.id)
+
+  isDropdownVisible.value = false
+  openColumnDropdownField.value = null
+  triggerRefreshCanvas()
+}
+
 function handleEditColumn(_e: MouseEvent, isDescription = false, column: ColumnType, clickedXOffset?: number) {
+  // Interface pages allow field edits only for the builder in edit mode
+  if (interfacePageDataApi && !interfacePageDataApi.canConfigureFields?.value) return
+
   if (
     isUIAllowed('fieldEdit') &&
     !isMobileMode.value &&
@@ -2696,7 +2830,7 @@ function handleEditColumn(_e: MouseEvent, isDescription = false, column: ColumnT
     overlayStyle.value = {
       top: `${rect.top}px`,
       left: `${rect.left + (clickedXOffset ?? xOffset)}px`,
-      width: col?.width ?? '180px',
+      width: `${parseCellWidth(col?.width ?? 180)}px`,
       height: `${headerRowHeight.value}px`,
       position: 'fixed',
     }
@@ -2801,9 +2935,11 @@ const duplicateRow = async (context: { row: number; col: number; path: Array<num
   const sourceRow = cachedRows.value.get(context.row)
   if (!sourceRow) return
 
-  // Clone the record's values (identity markers + system columns stripped, link
-  // values kept) so the insert creates a brand-new record (see getDuplicateRowData).
-  const clonedRow = getDuplicateRowData(sourceRow.row, meta.value?.columns as ColumnType[])
+  // Clone the record's values (identity markers + system columns stripped) so the
+  // insert creates a brand-new record. Prompts when the record holds links the copy
+  // can't share, and returns null if that prompt was dismissed.
+  const clonedRow = await prepareDuplicateRowData(sourceRow.row, meta.value?.columns as ColumnType[])
+  if (!clonedRow) return
 
   // Insert immediately below the source row. `before` is the pk of the row
   // currently one position down, so the copy lands right after the original
@@ -2928,8 +3064,11 @@ watch(rowHeight, () => {
   triggerRefreshCanvas()
 })
 
-// watch for column hide and re-render canvas
-watch([() => columns.value?.length, () => totalRows.value], () => {
+// watch for column hide/reorder and re-render canvas — keyed on the id
+// SEQUENCE (not the count): an external reorder (the interface builder's
+// Fields pane writes viz `field_order`) changes order but never length, and
+// the canvas only repaints on its own interaction events otherwise
+watch([() => columns.value?.map((c) => c.id).join(), () => totalRows.value], () => {
   nextTick(() => {
     calculateSlices()
     triggerRefreshCanvas()
@@ -3000,7 +3139,11 @@ watch(
   view,
   async (next, old) => {
     try {
-      if (next && next.id !== old?.id && (next.fk_model_id === route.params.viewId || isPublicView.value)) {
+      if (
+        next &&
+        next.id !== old?.id &&
+        (next.fk_model_id === route.params.viewId || isPublicView.value || !!interfacePageDataApi)
+      ) {
         clearTextCache()
         await until(isViewColumnsLoading).toMatch((c) => !c)
         if (isGroupBy.value) {
@@ -3137,6 +3280,13 @@ onClickOutside(
     openAggregationField.value = null
     openAddNewRowDropdown.value = null
     openGroupContextMenuDropdown.value = null
+    // Interface active header field (blue border + 3-dot) drops on outside clicks
+    // too — and its Field pane closes with it (deselect hides the field config).
+    if (interfaceActiveHeaderFieldId.value) {
+      interfaceActiveHeaderFieldId.value = null
+      interfacePageDataApi?.closeFieldPane?.()
+      triggerRefreshCanvas()
+    }
     if (activeCell.value.row >= 0 || activeCell.value.column >= 0 || editEnabled.value) {
       resetActiveCell(activeCell.value.path, true)
     }
@@ -3149,9 +3299,36 @@ onClickOutside(
       '.canvas-header-add-new-row-menu',
       '.canvas-group-context-menu',
       '.nc-smart-text-panel',
+      // Interface builder: interacting with a field's config pane must not
+      // count as an outside-click deselect (it would close the pane mid-edit).
+      '.nc-interface-properties-panel',
     ],
   },
 )
+
+/**
+ * Interface builder: clicking the config chrome (properties panel, topbar, toolbar
+ * incl. the user-filter tab strip, page sidebar) drops the active cell. A cell held
+ * across a filter-tab switch points into a result set that no longer exists, and a
+ * live active cell also makes the grid claim Tab from chrome the builder is now
+ * working in — `case 'Tab'` stands down once there is nothing selected.
+ *
+ * Separate from the `onClickOutside` above on purpose: the properties panel stays in
+ * that handler's ignore list so a field's config pane survives being clicked into,
+ * and this only ever touches the cell, never the header-field selection.
+ *
+ * `clearSelection`, NOT `resetActiveCell`: the latter runs `onActiveCellChanged` →
+ * `calculateSlices` → `updateVisibleRows`, which evicts the row cache outside the
+ * visible buffer and refetches chunks — a config click would flash skeleton rows.
+ */
+useEventListener(document, 'mousedown', (e: MouseEvent) => {
+  if (!isInterfaceConfigChromeTarget(e.target)) return
+
+  if (activeCell.value?.row >= 0 || activeCell.value?.column >= 0 || editEnabled.value) {
+    clearSelection()
+    triggerRefreshCanvas()
+  }
+})
 
 onKeyStroke('Escape', () => {
   openColumnDropdownField.value = null
@@ -3510,7 +3687,7 @@ watch(
                     :row="editEnabled.row"
                     :path="editEnabled.path"
                     active
-                    :read-only="!isDataEditAllowed || !editEnabled.isCellEditable || editEnabled.isSyncedColumn"
+                    :read-only="readOnly || !isDataEditAllowed || !editEnabled.isCellEditable || editEnabled.isSyncedColumn"
                     :is-allowed="editEnabled.isCellEditable"
                     @save="
                       updateOrSaveRow?.(editEnabled.row, editEnabled.column.title, state, undefined, undefined, editEnabled.path)
@@ -3525,7 +3702,7 @@ watch(
                     :path="editEnabled.path"
                     active
                     edit-enabled
-                    :read-only="!isDataEditAllowed || !editEnabled.isCellEditable || editEnabled.isSyncedColumn"
+                    :read-only="readOnly || !isDataEditAllowed || !editEnabled.isCellEditable || editEnabled.isSyncedColumn"
                     :is-allowed="editEnabled.isCellEditable"
                     @update:model-value="updateValue"
                     @save="updateOrSaveRow?.(...$event)"
@@ -3553,7 +3730,7 @@ watch(
             openGroupContextMenuDropdown
           )
         "
-        :overlay-class-name="`!bg-transparent !min-w-[220px] ${
+        :overlay-class-name="`!bg-transparent ${interfacePageDataApi && openColumnDropdownField ? '' : '!min-w-[220px]'} ${
           !openAggregationField && !openColumnDropdownField && !openGroupContextMenuDropdown && !openAddNewRowDropdown
             ? '!border-none !shadow-none'
             : ''
@@ -3562,26 +3739,48 @@ watch(
         @visible-change="onVisibilityChange"
         @update:visible="onVisibilityChange"
       >
-        <div
-          v-if="
-            openColumnDropdownField ||
-            isCreateOrEditColumnDropdownOpen ||
-            openAggregationField ||
-            openAddNewRowDropdown ||
-            openGroupContextMenuDropdown
-          "
-          :style="overlayStyle"
-          class="hide pointer-events-none"
-        ></div>
+        <!-- ant Trigger anchor: kept present while the dropdown is mounted, not
+             gated on menu-content conditions — else on menu close ant re-measures
+             an unmounted node and crashes on `null.offsetWidth`. -->
+        <div :style="overlayStyle" class="hide pointer-events-none"></div>
         <template #overlay>
           <Aggregation v-if="openAggregationField" v-model:column="openAggregationField" class="canvas-aggregation" />
           <SmartsheetHeaderMultiColumnMenu
-            v-else-if="openColumnDropdownField && isMultiHeaderMenuActive"
+            v-else-if="openColumnDropdownField && isMultiHeaderMenuActive && !interfacePageDataApi"
             v-model:is-open="isDropdownVisible"
             :columns="selectedHeaderColumns"
             :on-cleared="clearHeaderSelection"
             class="canvas-header-column-menu"
           />
+          <!-- Interface pages: minimal field menu — the full column menu's
+               view-level actions (sort, insert, view-column hide) don't apply
+               to a synthetic interface viz -->
+          <NcMenu
+            v-else-if="openColumnDropdownField && interfacePageDataApi"
+            class="nc-interface-field-menu w-[184px]"
+            variant="medium"
+          >
+            <NcMenuItem
+              v-if="isUIAllowed('fieldEdit') && !openColumnDropdownField.readonly"
+              data-testid="nc-interface-grid-field-edit"
+              @click="onInterfaceEditField($event)"
+            >
+              <div v-e="['c:interface:grid:field:edit']" class="text-bodyDefaultSm flex items-center gap-2">
+                <component :is="iconMap.ncEdit" class="opacity-80" />
+                {{ $t('labels.editField') }}
+              </div>
+            </NcMenuItem>
+            <NcMenuItem
+              v-if="!openColumnDropdownField.pv"
+              data-testid="nc-interface-grid-field-hide"
+              @click="onInterfaceHideField"
+            >
+              <div v-e="['c:interface:grid:field:hide']" class="text-bodyDefaultSm flex items-center gap-2">
+                <component :is="iconMap.eyeSlash" class="!w-4 !h-4 opacity-80" />
+                {{ $t('general.hideField') }}
+              </div>
+            </NcMenuItem>
+          </NcMenu>
           <SmartsheetHeaderColumnMenu
             v-else-if="openColumnDropdownField"
             v-model:is-open="isDropdownVisible"
@@ -3624,7 +3823,9 @@ watch(
         </template>
       </NcDropdown>
     </template>
-    <div class="absolute bottom-12 z-5 left-2" @click.stop>
+    <!-- Interface pages create records via the grid's inline "+" row / configured
+         form buttons — the floating split button is data-tab chrome -->
+    <div v-if="!interfacePageDataApi" class="absolute bottom-12 z-5 left-2" @click.stop>
       <NcTooltip v-if="meta?.synced" placement="right" :disabled="!meta?.synced">
         <NcButton class="nc-grid-add-new-row" size="small" disabled type="secondary" :shadow="false">
           <div class="flex items-center gap-2">

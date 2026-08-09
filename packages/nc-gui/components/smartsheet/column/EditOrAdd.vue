@@ -23,7 +23,6 @@ import { AiWizardTabsType, type PredictedFieldType, type UiTypesType } from '#im
 import MdiPlusIcon from '~icons/mdi/plus-circle-outline'
 import MdiMinusIcon from '~icons/mdi/minus-circle-outline'
 import MdiIdentifierIcon from '~icons/mdi/identifier'
-import { isEeUI } from '#imports'
 
 const props = defineProps<{
   preload?: Partial<ColumnType>
@@ -40,6 +39,10 @@ const props = defineProps<{
   editDescription?: boolean
   readonly?: boolean
   disableTitleFocus?: boolean
+  // Force the interface "edits the whole base" footer when the editor mounts
+  // outside a viz (the InterfacePageDataInj signal doesn't reach e.g. the
+  // interface properties panel).
+  interfaceNote?: boolean
 }>()
 
 const emit = defineEmits(['submit', 'cancel', 'mounted', 'add', 'update'])
@@ -142,6 +145,9 @@ const workspaceStore = useWorkspace()
 const { openedViewsTab } = storeToRefs(useViewsStore())
 
 const meta = inject(MetaInj, ref())
+
+// Interface pages: schema edits from an interface warn about base-wide scope
+const interfacePageDataApi = inject(InterfacePageDataInj, undefined)
 
 const isForm = inject(IsFormInj, ref(false))
 
@@ -264,9 +270,9 @@ const uiFilters = (t: UiTypesType) => {
   const showDeprecatedField = !t.deprecated || showDeprecated.value
 
   const showAiFields = [AIPrompt, AIButton].includes(t.name)
-    ? isAiBetaFeaturesEnabled.value && !isEdit.value && isEeUI && showEEFeatures.value
+    ? isAiBetaFeaturesEnabled.value && !isEdit.value && showEEFeatures.value
     : true
-  const showColourField = t.name === UITypes.Colour ? isEeUI && showEEFeatures.value : true
+  const showColourField = t.name === UITypes.Colour ? showEEFeatures.value : true
   const isAllowToAddInFormView = isForm.value ? !isFormViewHiddenCol(t.name as UITypes) : true
 
   const showLTAR = t.name === UITypes.LinkToAnotherRecord ? !isEdit.value || isTextToLtar : true
@@ -282,10 +288,10 @@ const uiFilters = (t: UiTypesType) => {
   // existing data would break both invariants; the backend (and the
   // dropdown line 228 above for edit mode) enforces that.
   const isUuidCompatibleSource = isPg(meta.value?.source_id) || isMssql(meta.value?.source_id)
-  const showUUID = t.name !== UITypes.UUID || (isUuidCompatibleSource && isEeUI && showEEFeatures.value && !isEdit.value)
+  const showUUID = t.name !== UITypes.UUID || (isUuidCompatibleSource && showEEFeatures.value && !isEdit.value)
 
   // AutoNumber is only supported for PostgreSQL databases
-  const showAutoNumber = t.name !== UITypes.AutoNumber || (isPg(meta.value?.source_id) && isEeUI && showEEFeatures.value)
+  const showAutoNumber = t.name !== UITypes.AutoNumber || (isPg(meta.value?.source_id) && showEEFeatures.value)
 
   return (
     systemFiledNotEdited &&
@@ -1502,7 +1508,6 @@ const unique = computed({
                 sqlUi?.isUniqueSupportedField?.(formState.uidt) !== false &&
                 !isUUID(formState) &&
                 !isAutoNumber(formState) &&
-                isEeUI &&
                 showEEFeatures
               "
               class="flex"
@@ -1748,6 +1753,20 @@ const unique = computed({
     </a-form>
 
     <LazyDlgConvertLinkV2 v-model:visible="isConvertLinkV2ModalOpen" :column="column" @converted="emit('cancel')" />
+
+    <!-- Interface builders edit the REAL base field — the card says so. Full
+         bleed via negative margins (card mode is p-5 with !pb-0 when a type
+         is set, which is always true while editing). -->
+    <div
+      v-if="isEdit && !embedMode && (interfacePageDataApi || props.interfaceNote)"
+      class="nc-interface-field-edit-note -mx-5 mt-4 px-5 py-3 flex items-start gap-2 bg-nc-bg-gray-light rounded-b-2xl border-t border-nc-border-gray-medium text-bodySm text-nc-content-gray-subtle"
+    >
+      <GeneralIcon icon="info" class="flex-none w-3.5 h-3.5 mt-0.5" />
+      <div>
+        <div class="font-semibold">{{ $t('msg.info.interfaceFieldEditShared') }}</div>
+        <div>{{ $t('msg.info.interfaceFieldEditSharedDetail') }}</div>
+      </div>
+    </div>
   </div>
 </template>
 

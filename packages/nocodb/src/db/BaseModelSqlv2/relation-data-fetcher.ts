@@ -1,5 +1,10 @@
 import groupBy from 'lodash/groupBy';
-import { extractFilterFromXwhere, NcApiVersion } from 'nocodb-sdk';
+import {
+  extractFilterFromXwhere,
+  getFirstNonPersonalView,
+  NcApiVersion,
+  ViewTypes,
+} from 'nocodb-sdk';
 import type { NcContext } from 'nocodb-sdk';
 import type { Logger } from '@nestjs/common';
 import type { IBaseModelSqlV2 } from '~/db/IBaseModelSqlV2';
@@ -59,29 +64,22 @@ export const relationDataFetcher = (param: {
       return data;
     }
 
-    if (!context.cacheMap) {
-      context.cacheMap = new Map();
-    }
-
-    let postProcessModels: Set<string> = context.cacheMap.get(
-      'relation_postProcessData_models',
-    );
-    if (!postProcessModels) {
-      postProcessModels = new Set();
-      context.cacheMap.set('relation_postProcessData_models', postProcessModels);
-    }
-
-    const extractOnlyPrimaries = postProcessModels.has(model.id);
-
     const { ast, parsedQuery } = await getAst(context, {
       model,
       query,
-      extractOnlyPrimaries,
+      extractOnlyPrimaries:
+        context.cacheMap?.get('relation_postProcessData') ?? false,
     });
 
-    postProcessModels.add(model.id);
+    if (!context.cacheMap) {
+      context.cacheMap = new Map();
+    }
+    // set context.cacheMap `relation_postProcessData` to ensure non-infinite loop
+    context.cacheMap.set('relation_postProcessData', true);
 
-    return await nocoExecute(ast, data, {}, parsedQuery);
+    // nocoexecute
+    const result = await nocoExecute(ast, data, {}, parsedQuery);
+    return result;
   }
 
   return {
@@ -324,7 +322,10 @@ export const relationDataFetcher = (param: {
 
       await refTable.getViews(refContext);
       const viewId =
-        relColumn.colOptions?.fk_target_view_id ?? refTable.views?.[0]?.id;
+        relColumn.colOptions?.fk_target_view_id ??
+        getFirstNonPersonalView([...(refTable.views ?? [])], {
+          includeViewType: ViewTypes.GRID,
+        })?.id;
       let view: View | null = null;
       if (viewId) view = await View.get(refContext, viewId);
 
@@ -342,9 +343,35 @@ export const relationDataFetcher = (param: {
         const view = relColOptions.fk_target_view_id
           ? await View.get(refContext, relColOptions.fk_target_view_id)
           : await View.getFirstCollaborativeView(refContext, refTable.id);
+        let childSorts = [];
         if (view) {
-          const childSorts = await view.getSorts(refContext);
-          await sortV2(refBaseModel, childSorts, qb);
+          childSorts = await view.getSorts(refContext);
+          if (childSorts?.length) await sortV2(refBaseModel, childSorts, qb);
+        }
+        // No explicit sort and no view sort → fall back to the per-link order.
+        // The junction Order column grouped by the current side's FK (vcn, i.e.
+        // getMMChildColumn) holds this record's manual arrangement of its links.
+        // v1 links / external junctions have no such column → natural order.
+        // Per-link ordering is Postgres-only (the Order column exists on any
+        // isMeta source, but ordering by it is only wired/valid on pg).
+        if (!childSorts?.length && baseModel.isPg) {
+          const linkOrderCol = await relColOptions.getMMChildOrderColumn(
+            mmContext,
+          );
+          if (linkOrderCol) {
+            // Drop the default related-table order applied above (the related
+            // model's own `nc_order`/PK sort). Without this the per-link order is
+            // only appended as a tiebreaker, so the related table's row order
+            // wins and the manual link arrangement is ignored. Safe here: this
+            // branch runs only when there is NO explicit sort AND no view sort,
+            // so nothing user-intended is discarded.
+            qb.clear('order');
+            qb.orderBy(`${vtn}.${linkOrderCol.column_name}`, 'asc');
+            // Deterministic tiebreak on the related-side junction FK (part of
+            // the junction PK) so equal order values (backfill/manual/concurrent)
+            // never yield a nondeterministic read order.
+            qb.orderBy(`${vtn}.${vrcn}`, 'asc');
+          }
         }
       }
 
@@ -615,7 +642,10 @@ export const relationDataFetcher = (param: {
 
         await childTable.getViews(childBaseModel.context);
         const viewId =
-          relColumn.colOptions?.fk_target_view_id ?? childTable.views?.[0]?.id;
+          relColumn.colOptions?.fk_target_view_id ??
+          getFirstNonPersonalView([...(childTable.views ?? [])], {
+            includeViewType: ViewTypes.GRID,
+          })?.id;
         let view: View | null = null;
         if (viewId) view = await View.get(childBaseModel.context, viewId);
 
@@ -1299,10 +1329,13 @@ export const relationDataFetcher = (param: {
       if (refView) {
         const { dependencyFields } = await getAst(refContext, {
           model: refTable,
-          query: {},
+          // Honor explicit `fields` so a view-hidden requested column is still
+          // returned. Limited-access still collapses to pk/pv below.
+          query: { fields: (args as any)?.fields },
           view: hasLimitedAccess ? null : refView,
           throwErrorIfInvalidParams: false,
           extractOnlyPrimaries: hasLimitedAccess,
+          allowRequestedHiddenFields: true,
         });
         listArgs = dependencyFields;
       }
@@ -1629,9 +1662,12 @@ export const relationDataFetcher = (param: {
       if (targetView) {
         const { dependencyFields } = await getAst(refContext, {
           model: isBt ? parentTable : childTable,
-          query: {},
+          // Honor explicit `fields` so a view-hidden requested column is still
+          // returned. Limited-access still collapses to pk/pv below.
+          query: { fields: (args as any)?.fields },
           view: targetView,
           throwErrorIfInvalidParams: false,
+          allowRequestedHiddenFields: true,
         });
         listArgs = dependencyFields;
       }

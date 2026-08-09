@@ -258,7 +258,7 @@ const canLockView = computed(() => isUIAllowed('fieldAdd'))
 // Personal views cannot be created on a sandbox — they belong to the master base.
 const lockTypeOptions = computed(() => {
   const options: Array<{ value: ViewLockType; disabled?: boolean }> = [{ value: ViewLockType.Collaborative }]
-  if (isEeUI) options.push({ value: ViewLockType.Personal, disabled: isSandbox.value })
+  if (showEEFeatures.value) options.push({ value: ViewLockType.Personal, disabled: isSandbox.value })
   if (canLockView.value) options.push({ value: ViewLockType.Locked, disabled: isSandboxProduction.value })
   return options
 })
@@ -1100,7 +1100,7 @@ watch(activeBaseId, () => {
             <div class="text-[13px] font-medium text-nc-content-gray">{{ $t('labels.whoCanEdit') }}</div>
             <a-radio-group
               v-model:value="form.lock_type"
-              class="nc-create-view-lock-radio-group !flex !flex-nowrap items-center gap-x-5"
+              class="nc-create-view-lock-radio-group !flex !flex-nowrap items-center justify-between"
             >
               <template v-for="option in lockTypeOptions" :key="option.value">
                 <!-- Personal is payment-gated: on unlicensed on-prem / non-Plus cloud,
@@ -1108,7 +1108,7 @@ watch(activeBaseId, () => {
                      modal instead of setting lock_type. On a sandbox base, personal
                      views are disabled — they must be created on the master base. -->
                 <NcTooltip
-                  v-if="option.value === ViewLockType.Personal && isEeUI && showEEFeatures"
+                  v-if="option.value === ViewLockType.Personal && showEEFeatures"
                   :disabled="!option.disabled"
                   :title="$t('tooltip.personalViewDisabledOnSandbox')"
                 >
@@ -1133,7 +1133,15 @@ watch(activeBaseId, () => {
                           {{ $t(viewLockIcons[option.value].title) }}
                           <!-- show-as-lock renders a compact lock icon when gated
                                and auto-hides when the feature is enabled -->
-                          <PaymentUpgradeBadge :feature="PlanFeatureTypes.FEATURE_PERSONAL_VIEWS" show-as-lock />
+                          <PaymentUpgradeBadge
+                            :feature="PlanFeatureTypes.FEATURE_PERSONAL_VIEWS"
+                            :content="
+                              $t('upgrade.upgradeToAccessPersonalViewSubtitle', {
+                                plan: getPlanTitle(PlanTitles.PLUS),
+                              })
+                            "
+                            show-as-lock
+                          />
                         </span>
                       </a-radio>
                     </template>
@@ -1310,7 +1318,7 @@ watch(activeBaseId, () => {
                   </a-select-option>
                 </a-select>
               </div>
-              <PaymentUpgradeBadgeProvider v-if="isEeUI && showEEFeatures" :feature="PlanFeatureTypes.FEATURE_CALENDAR_RANGE">
+              <PaymentUpgradeBadgeProvider v-if="showEEFeatures" :feature="PlanFeatureTypes.FEATURE_CALENDAR_RANGE">
                 <template #default="{ click }">
                   <div class="w-full space-y-2">
                     <NcButton

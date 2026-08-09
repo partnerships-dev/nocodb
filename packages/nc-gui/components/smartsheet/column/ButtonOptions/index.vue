@@ -57,8 +57,12 @@ const bases = useBases()
 
 const { openedProject } = storeToRefs(bases)
 
-if (showEEFeatures.value) {
-  await Promise.all([loadHooksList(), loadScripts({ baseId: openedProject.value!.id, force: true })])
+// The injected table meta covers hosts without a route-level active table /
+// opened base (e.g. the interface builder's field editor).
+const scriptsBaseId = openedProject.value?.id ?? meta.value?.base_id
+
+if (isEeUI) {
+  await Promise.all([loadHooksList(meta.value), ...(scriptsBaseId ? [loadScripts({ baseId: scriptsBaseId, force: true })] : [])])
 }
 
 const { activeBaseScripts } = toRefs(scriptStore)
@@ -106,7 +110,7 @@ const buttonTypes = computed(() => [
         },
       ]
     : []),
-  ...(isEeUI && showEEFeatures.value
+  ...(showEEFeatures.value
     ? [
         {
           icon: 'ncScript',
@@ -554,7 +558,7 @@ if (isEdit.value) {
       v-model:selected-script="selectedScript"
     />
 
-    <PaymentUpgradeBadgeProvider v-if="isEeUI && showEEFeatures" :feature="PlanFeatureTypes.FEATURE_BUTTON_VISIBILITY">
+    <PaymentUpgradeBadgeProvider v-if="showEEFeatures" :feature="PlanFeatureTypes.FEATURE_BUTTON_VISIBILITY">
       <template #default="{ click }">
         <div class="nc-button-filter-section mt-2">
           <div

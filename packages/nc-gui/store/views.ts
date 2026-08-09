@@ -20,6 +20,7 @@ import {
 import { acceptHMRUpdate, defineStore } from 'pinia'
 import { useTitle } from '@vueuse/core'
 import type { ViewPageType } from '~/lib/types'
+import { INTERFACE_VIEW_ID_PREFIX } from '~/lib/interfaceData'
 import { getFormattedViewTabTitle } from '~/helpers/parsers/parserHelpers'
 import { DlgViewCopyViewConfigFromAnotherView, DlgViewCreate } from '#components'
 import { userLocalStorageInfoManager } from '#imports'
@@ -207,13 +208,22 @@ export const useViewsStore = defineStore('viewsStore', () => {
   const isLockedView = computed(() => activeView.value?.lock_type === 'locked')
 
   const isActiveViewFieldHeaderVisible = computed(() => {
+    const viewMeta = parseProp((activeView.value?.view as GalleryType | KanbanType)?.meta)
+
+    // Synthetic interface views carry the builder's "Display field names" toggle
+    // in their meta and bypass the view-feature plan gate — the toggle belongs to
+    // the interface builder surface, not the view settings UI the gate protects.
+    if (activeView.value?.id?.startsWith(INTERFACE_VIEW_ID_PREFIX)) {
+      return viewMeta?.is_field_header_visible ?? true
+    }
+
     // If card field header visibility is not enabled or blocked, return true to show header by default
     if (blockCardFieldHeaderVisibility.value || !isEeUI) return true
 
-    return parseProp((activeView.value?.view as GalleryType | KanbanType)?.meta)?.is_field_header_visible ?? true
+    return viewMeta?.is_field_header_visible ?? true
   })
 
-  const isListViewEnabled = computed(() => isEeUI && showEEFeatures.value)
+  const isListViewEnabled = computed(() => showEEFeatures.value)
 
   const isShowEveryonePersonalViewsEnabled = computed({
     get: () => {
@@ -761,6 +771,7 @@ export const useViewsStore = defineStore('viewsStore', () => {
       if (activeViewId === view.id) {
         const key = getViewsKey(view.base_id, view.fk_model_id)
         const remainingViews = viewsByTable.value.get(key) || []
+        // TODO: use getFirstNonPersonalView(remainingViews, { includeViewType: ViewTypes.GRID }) so we don't default to a personal or non-grid view
         const defaultView = remainingViews[0]
 
         if (defaultView && activeTable.value) {
@@ -1188,7 +1199,7 @@ export const useViewsStore = defineStore('viewsStore', () => {
     const result = {
       isDisabled: false,
       tooltip: '',
-      isVisible: isEeUI && isUIAllowed('viewCreateOrEdit') && showEEFeatures.value,
+      isVisible: isUIAllowed('viewCreateOrEdit') && showEEFeatures.value,
     }
 
     if (!view) return result

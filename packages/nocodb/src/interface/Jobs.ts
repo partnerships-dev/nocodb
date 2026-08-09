@@ -14,6 +14,7 @@ import type {
   UserType,
 } from 'nocodb-sdk';
 import type { NcContext, NcRequest } from '~/interface/config';
+import type { Filter } from '~/models';
 export const JOBS_QUEUE = 'jobs';
 
 export enum MigrationJobTypes {
@@ -30,6 +31,9 @@ export enum MigrationJobTypes {
   NormalizeSoftDeleteSqliteMigration = 'normalize-soft-delete-sqlite-migration',
   RecordTrashBackfill = 'record-trash-backfill',
   CleanupOrphanCrossBaseLinks = 'cleanup-orphan-cross-base-links',
+  CleanupOrphanViewColumns = 'cleanup-orphan-view-columns',
+  PgSourceSearchPathBackfill = 'pg-source-searchpath-backfill',
+  CreditPlanBackfill = 'credit-plan-backfill',
 }
 
 export enum JobTypes {
@@ -47,6 +51,7 @@ export enum JobTypes {
   HandleWebhook = 'handle-webhook',
   CleanUp = 'clean-up',
   DataExport = 'data-export',
+  InterfaceDataExport = 'interface-data-export',
   DataExportCleanUp = 'data-export-clean-up',
   ThumbnailGenerator = 'thumbnail-generator',
   AttachmentCleanUp = 'attachment-clean-up',
@@ -54,6 +59,7 @@ export enum JobTypes {
   UseWorker = 'use-worker',
   CreateSnapshot = 'create-snapshot',
   RestoreSnapshot = 'restore-snapshot',
+  SnapshotSchedule = 'snapshot-schedule',
   ListenImport = 'listen-import',
   SyncModuleSyncData = 'sync-module-sync-data',
   SyncModuleMigrateSync = 'sync-module-migrate-sync',
@@ -86,6 +92,8 @@ export enum JobTypes {
   MailOutboxRecovery = 'mail-outbox-recovery',
   MailScanner = 'mail-scanner',
   OperationCleanup = 'operation-cleanup',
+  CreditReaper = 'credit-reaper',
+  CreditMeteringAudit = 'credit-metering-audit',
 }
 
 export const SKIP_STORING_JOB_META = [
@@ -98,11 +106,13 @@ export const SKIP_STORING_JOB_META = [
   JobTypes.UpdateWsStat,
   JobTypes.UpdateUsageStats,
   JobTypes.SyncModuleSchedule,
+  JobTypes.SnapshotSchedule,
   JobTypes.ReseatSubscription,
   JobTypes.WorkflowCronSchedule,
   JobTypes.WorkflowResumeSchedule,
   JobTypes.BaseTrashCleanUp,
   JobTypes.OperationCleanup,
+  JobTypes.CreditReaper,
   JobTypes.ResumeWorkflow,
   JobTypes.HeartbeatWorkflow,
   JobTypes.PollWorkflow,
@@ -218,6 +228,7 @@ export interface DuplicateBaseJobData extends JobData {
     excludeUsers?: boolean;
     excludeScripts?: boolean;
     excludeDashboards?: boolean;
+    excludeInterfaces?: boolean;
     excludeWorkflows?: boolean;
     excludeDocuments?: boolean;
     excludePersonalViews?: boolean;
@@ -305,10 +316,28 @@ export interface DataExportJobData extends JobData {
     filenameTimeZone?: string;
     filterArrJson?: string;
     sortArrJson?: string;
+    // Set on the anonymous public export route to restrict the ICS description
+    // to view-visible columns.
+    isPublicExport?: boolean;
   };
   modelId: string;
   viewId: string;
-  exportAs: 'csv' | 'json' | 'excel';
+  exportAs: 'csv' | 'json' | 'excel' | 'ics';
+  ncSiteUrl: string;
+  locale?: string;
+}
+
+export interface InterfaceDataExportJobData extends JobData {
+  options?: {
+    filenameTimeZone?: string;
+  };
+  scope: {
+    modelId: string;
+    exportColumnIds: string[];
+    customConditions: Filter[];
+    sortArrJson?: string;
+  };
+  pageTitle: string;
   ncSiteUrl: string;
   locale?: string;
 }
@@ -323,6 +352,15 @@ export interface CreateSnapshotJobData extends JobData {
   snapshotBaseId: string;
   req: NcRequest;
   snapshot: SnapshotType;
+}
+
+export interface ConsolidateBasesOptions {
+  /**
+   * Physical table names can collide across sources; meta ids cannot. `fail`
+   * refuses and lists them, `prefix` renames the losing side. Never silent.
+   */
+  onTableNameCollision?: 'fail' | 'prefix';
+  excludeData?: boolean;
 }
 
 export interface RestoreSnapshotJobData extends JobData {

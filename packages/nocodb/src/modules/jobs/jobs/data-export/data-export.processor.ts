@@ -12,6 +12,7 @@ dayjs.extend(timezone);
 import { type DataExportJobData } from '~/interface/Jobs';
 import { elapsedTime, initTime } from '~/modules/jobs/helpers';
 import { ExportService } from '~/modules/jobs/jobs/export-import/export.service';
+import { createCharsetEncodeStream } from '~/modules/jobs/jobs/data-export/csv-encoding';
 import { Base, Model, PresignedUrl, View } from '~/models';
 import { NcError } from '~/helpers/catchError';
 import NcPluginMgrv2 from '~/helpers/NcPluginMgrv2';
@@ -38,7 +39,12 @@ export class DataExportProcessor {
       locale,
     } = job.data;
 
-    if (exportAs !== 'csv' && exportAs !== 'json' && exportAs !== 'excel')
+    if (
+      exportAs !== 'csv' &&
+      exportAs !== 'json' &&
+      exportAs !== 'excel' &&
+      exportAs !== 'ics'
+    )
       NcError.notImplemented(`Export as ${exportAs}`);
 
     const hrTime = initTime();
@@ -65,7 +71,13 @@ export class DataExportProcessor {
     )}) ${date}`;
 
     const fileExtension =
-      exportAs === 'json' ? 'json' : exportAs === 'excel' ? 'xlsx' : 'csv';
+      exportAs === 'json'
+        ? 'json'
+        : exportAs === 'excel'
+        ? 'xlsx'
+        : exportAs === 'ics'
+        ? 'ics'
+        : 'csv';
     const destPath = `nc/uploads/data-export/${dateFolder}/${modelId}/${filename}.${fileExtension}`;
 
     let url = null;
@@ -80,15 +92,23 @@ export class DataExportProcessor {
         dataStream.setEncoding('utf8');
       }
 
-      const encodedStream =
+      const legacyCharset =
         exportAs !== 'excel' &&
         options?.encoding &&
         options.encoding !== 'utf-8' &&
         iconv.encodingExists(options.encoding)
-          ? dataStream
-              .pipe(iconv.decodeStream('utf-8'))
-              .pipe(iconv.encodeStream(options?.encoding || 'utf-8'))
-          : dataStream;
+          ? options.encoding
+          : null;
+
+      const encodedStream = legacyCharset
+        ? dataStream.pipe(
+            createCharsetEncodeStream(legacyCharset, () =>
+              this.logger.warn(
+                `Data export ${modelId}: requested charset "${legacyCharset}" cannot represent all characters; falling back to UTF-8 to avoid data loss.`,
+              ),
+            ),
+          )
+        : dataStream;
 
       if (
         exportAs === 'csv' &&
@@ -144,6 +164,26 @@ export class DataExportProcessor {
             dataStream.push(null);
             error = e;
           });
+      } else if (exportAs === 'ics') {
+        this.exportService
+          .streamModelDataAsIcs(context, {
+            dataStream,
+            baseId: model.base_id,
+            modelId: model.id,
+            viewId: view.id,
+            ncSiteUrl: ncSiteUrl,
+            filterArrJson: options.filterArrJson,
+            sortArrJson: options.sortArrJson,
+            locale,
+            // Public export path: restrict the ICS description to view-visible
+            // columns.
+            restrictToViewVisibleColumns: !!options?.isPublicExport,
+          })
+          .catch((e) => {
+            this.logger.debug(e);
+            dataStream.push(null);
+            error = e;
+          });
       } else {
         this.exportService
           .streamModelDataAsCsv(context, {
@@ -178,6 +218,8 @@ export class DataExportProcessor {
           ? 'application/json'
           : exportAs === 'csv'
           ? 'text/csv'
+          : exportAs === 'ics'
+          ? 'text/calendar'
           : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
       const filenameWithExt = `${filename}.${fileExtension}`;
 

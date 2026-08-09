@@ -20,7 +20,10 @@ import { parseFilterArrJson } from '~/helpers/filterArrJsonHelper';
 import { Column, Model, Source, View } from '~/models';
 import { nocoExecute, processConcurrently } from '~/utils';
 import { DatasService } from '~/services/datas.service';
-import { TraceCommand } from '~/decorators/trace-command.decorator';
+import {
+  captureForTrace,
+  TraceCommand,
+} from '~/decorators/trace-command.decorator';
 import { OperationName } from '~/command-registry/op-names';
 import { NcError } from '~/helpers/catchError';
 import getAst from '~/helpers/getAst';
@@ -504,8 +507,10 @@ export class DataTableService {
     const relatedModel = await colOptions.getRelatedTable(refContext);
 
     // Strip caller-supplied where/sort references to columns the link doesn't expose
-    // (cross-base / visibility-limited related tables). Both the data fetch and the
-    // count read from `param.query`, so sanitizing it here covers both surfaces.
+    // (cross-base / visibility-limited related tables). This is NOT the view-`show`
+    // dimension (view-hidden columns stay queryable) — it's the cross-base isolation
+    // / table-visibility ACL boundary. Both the data fetch and the count read from
+    // `param.query`, so sanitizing it here covers both surfaces.
     await restrictNestedLinkQuery(
       context,
       colOptions,
@@ -677,6 +682,46 @@ export class DataTableService {
     return true;
   }
 
+  // Move an existing link (`refRowId`) within `rowId`'s ordered list for a v2
+  // junction link, placing it before `before` (another linked record) or at the
+  // end when `before` is null.
+  @TraceCommand(OperationName.recordLinkReorder)
+  async nestedReorder(
+    context: NcContext,
+    param: {
+      cookie: any;
+      viewId: string;
+      modelId: string;
+      columnId: string;
+      query: any;
+      rowId: string;
+      refRowId: string | number;
+      before?: string | number | null;
+      user?: any;
+    },
+  ) {
+    const { model, view } = await this.getModelAndView(context, param);
+
+    const source = await Source.get(context, model.source_id);
+
+    const baseModel = await Model.getBaseModelSQL(context, {
+      id: model.id,
+      viewId: view?.id,
+      dbDriver: await NcConnectionMgrv2.get(source),
+    });
+
+    const column = await this.getColumn(context, param);
+
+    await baseModel.reorderLink({
+      colId: column.id,
+      rowId: param.rowId,
+      childId: param.refRowId,
+      before: param.before ?? null,
+      cookie: param.cookie,
+    });
+    return true;
+  }
+
   @TraceCommand(OperationName.recordLinkRemove)
   async nestedUnlink(
     context: NcContext,
@@ -738,6 +783,14 @@ export class DataTableService {
   ) {
     const { swapEntry, feResponse } =
       await this.computeListCopyPasteOrDeleteAllDiff(context, param);
+
+    // Deposit the computed diff for an OUTER trace scope (the interface
+    // page-scoped swap contract builds its inverse from it — its own params
+    // never carry the diff). No-op when no outer scope is active.
+    captureForTrace(
+      'linkSwapEntry',
+      swapEntry ? { ...swapEntry, rowId: String(swapEntry.rowId) } : null,
+    );
 
     if (swapEntry) {
       await this._traceApplyLinkSwap(context, {
@@ -857,10 +910,11 @@ export class DataTableService {
     }
 
     // Strip caller-supplied where/sort references to columns the link doesn't
-    // expose (cross-base / visibility-limited related tables). The copy/paste/
-    // deleteAll diff returns the matched related records, so an unsanitized
-    // predicate on a hidden column would be the same one-bit oracle the list
-    // path closes — sanitize before the query reaches getAst/mmList.
+    // expose (cross-base / visibility-limited related tables — NOT the view-`show`
+    // dimension, which stays queryable). The copy/paste/deleteAll diff returns the
+    // matched related records, so an unsanitized predicate on a non-exposed column
+    // would be the same one-bit oracle the list path closes — sanitize before the
+    // query reaches getAst/mmList.
     await restrictNestedLinkQuery(
       context,
       colOptions,
@@ -1146,6 +1200,13 @@ export class DataTableService {
       results.push(feResponse ?? { link: [], unlink: [] });
     }
 
+    // Same deposit as the single-cell path — the interface bulk swap
+    // contract reads it for its page-scoped inverse.
+    captureForTrace(
+      'linkSwapBulkEntries',
+      swapEntries.map((e) => ({ ...e, rowId: String(e.rowId) })),
+    );
+
     if (swapEntries.length) {
       await this._traceApplyLinkSwapBulk(context, {
         modelId: param.modelId,
@@ -1245,6 +1306,14 @@ export class DataTableService {
         linkSwapEntries,
       );
     }
+
+    // Deposit the resolved diffs for an OUTER trace scope (the interface
+    // by-display contract builds its page-scoped inverse from them — its own
+    // params only carry display strings). No-op without an outer scope.
+    captureForTrace(
+      'linkSwapBulkEntries',
+      linkSwapEntries.map((e) => ({ ...e, rowId: String(e.rowId) })),
+    );
 
     if (linkSwapEntries.length) {
       await this._traceApplyLinkByDisplay(context, {

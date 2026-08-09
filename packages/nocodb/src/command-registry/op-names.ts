@@ -119,6 +119,34 @@ export const OperationName = {
   workflowPublish: 'workflowPublish',
   workflowDuplicate: 'workflowDuplicate',
 
+  // Interfaces + interface pages
+  interfaceCreate: 'interfaceCreate',
+  interfaceUpdate: 'interfaceUpdate',
+  interfaceDelete: 'interfaceDelete',
+  interfaceDuplicate: 'interfaceDuplicate',
+  interfacePageCreate: 'interfacePageCreate',
+  interfacePageUpdate: 'interfacePageUpdate',
+  interfacePageDelete: 'interfacePageDelete',
+  interfacePageDuplicate: 'interfacePageDuplicate',
+  interfacePageClearDraft: 'interfacePageClearDraft',
+  // Interface sharing grants (PrincipalAssignment upserts/revokes) —
+  // base-scoped.
+  interfaceGrantSet: 'interfaceGrantSet',
+  interfaceGrantDelete: 'interfaceGrantDelete',
+  // Record writes made through a page's visualization or form — same
+  // record semantics as recordInsert/recordUpdate/recordDelete but
+  // scoped to the page's undo stack instead of the table's.
+  interfaceRecordInsert: 'interfaceRecordInsert',
+  interfaceRecordUpdate: 'interfaceRecordUpdate',
+  interfaceRecordDelete: 'interfaceRecordDelete',
+  interfaceRecordBulkDelete: 'interfaceRecordBulkDelete',
+  interfaceRecordBulkUpdate: 'interfaceRecordBulkUpdate',
+  interfaceRecordLinkAdd: 'interfaceRecordLinkAdd',
+  interfaceRecordLinkRemove: 'interfaceRecordLinkRemove',
+  interfaceRecordLinkSwap: 'interfaceRecordLinkSwap',
+  interfaceRecordLinkSwapBulk: 'interfaceRecordLinkSwapBulk',
+  interfaceRecordLinkByDisplay: 'interfaceRecordLinkByDisplay',
+
   // View sections
   viewSectionCreate: 'viewSectionCreate',
   viewSectionUpdate: 'viewSectionUpdate',
@@ -198,6 +226,9 @@ export const OperationName = {
   recordLinkAdd: 'recordLinkAdd',
   recordLinkRemove: 'recordLinkRemove',
   recordMove: 'recordMove',
+  // Per-link reorder within a v2 junction's ordered list (self-inverse:
+  // reorder back to the pre-move neighbour captured in entry.before)
+  recordLinkReorder: 'recordLinkReorder',
 
   // Compound link diff/swap ops (Phase D — single op, link↔unlink swap inverse)
   recordLinkSwap: 'recordLinkSwap',

@@ -23,6 +23,11 @@ import type {
 import type LookupColumn from '../models/LookupColumn';
 import formulaQueryBuilderv2 from '~/db/formulav2/formulaQueryBuilderv2';
 import genRollupSelectv2 from '~/db/genRollupSelectv2';
+import {
+  applyLookupPkInLimit,
+  applyNestedLookupLevelLimit,
+  loadLookupSortAndLimit,
+} from '~/db/lookupSortLimit';
 import { NcError } from '~/helpers/catchError';
 import { getAliasedSoftDeleteFilter, getAs } from '~/helpers/dbHelpers';
 import { Model, View } from '~/models';
@@ -141,10 +146,18 @@ export default async function generateLookupSelectQuery({
 
   const context = baseModelSqlv2.context;
 
+  // Captured before the inner `context`/`baseModelSqlv2` shadows — the lookup's
+  // sort+limit config lives under the root base; the feature is PG-only.
+  const rootContext = context;
+  const rootIsPg = baseModelSqlv2.isPg;
+
   const rootAlias = alias;
 
   {
     let selectQb: Knex.QueryBuilder;
+    // Per-link ordering (PG only): junction Order column ref for the current
+    // side, set for ordered mm links so the json_agg below can ORDER BY it.
+    let mmLinkOrderRef: string | undefined;
     const alias = getAlias();
     let lookupColOpt: LookupColumn;
     let isBtLookup = true;
@@ -354,6 +367,20 @@ export default async function generateLookupSelectQuery({
         if (isSingleTargetV2) {
           selectQb.limit(1);
         }
+
+        // Capture the junction Order column (current side) for ordered json_agg
+        // — but only as the DEFAULT order. If this lookup has its own sort/limit
+        // config, that ordering wins (applied elsewhere), so leave the link order
+        // off to avoid it overriding the lookup sort.
+        if (baseModelSqlv2.isPg) {
+          const lookupCfg = await loadLookupSortAndLimit(rootContext, column);
+          if (!lookupCfg.hasConfig) {
+            const linkOrderCol = await relation.getMMChildOrderColumn(context);
+            if (linkOrderCol) {
+              mmLinkOrderRef = `${mmTableAlias}.${linkOrderCol.column_name}`;
+            }
+          }
+        }
       }
     }
     let lookupColumn = lookupColOpt
@@ -387,6 +414,30 @@ export default async function generateLookupSelectQuery({
     {
       let prevAlias = alias;
       let context = refContext;
+
+      // Per-lookup Limit — OUTER level (PG): restrict the first-level relation
+      // rows to the configured top-N BEFORE any nested joins, correlated to the
+      // root row. Applies to single-level lookups and the outer level of nested
+      // ones (the pk-IN survives the nested joins added below).
+      if (column.uidt === UITypes.Lookup && rootIsPg) {
+        const cfg = await loadLookupSortAndLimit(rootContext, column);
+        if (cfg.hasConfig && cfg.limitVal > 0) {
+          const outerRefModel = await lookupColumn.getModel(context);
+          const outerRefBaseModel = await Model.getBaseModelSQL(context, {
+            model: outerRefModel,
+            dbDriver: knex,
+          });
+          await applyLookupPkInLimit({
+            qb: selectQb,
+            alias: prevAlias,
+            refBaseModel: outerRefBaseModel,
+            sorts: cfg.sorts,
+            limitVal: cfg.limitVal,
+            takeLast: cfg.takeLast,
+          });
+        }
+      }
+
       while (
         lookupColumn.uidt === UITypes.Lookup ||
         lookupColumn.uidt === UITypes.LinkToAnotherRecord
@@ -469,6 +520,25 @@ export default async function generateLookupSelectQuery({
           if (nestedBtSoftDeleteFilter) {
             selectQb.where(nestedBtSoftDeleteFilter);
           }
+
+          // INNER-level limit for a nested lookup (BT): restrict this level's
+          // joined rows to the top-N per the previous level's row.
+          if (rootIsPg && nestedLookupColOpt) {
+            const cfg = await loadLookupSortAndLimit(context, lookupColumn);
+            if (cfg.hasConfig && cfg.limitVal > 0) {
+              await applyNestedLookupLevelLimit({
+                qb: selectQb,
+                nestedAlias,
+                nestedRefBaseModel: parentBaseModel,
+                corrColName: parentColumn.column_name,
+                prevAlias,
+                prevCorrColName: childColumn.column_name,
+                sorts: cfg.sorts,
+                limitVal: cfg.limitVal,
+                takeLast: cfg.takeLast,
+              });
+            }
+          }
         } else if (relationType === RelationTypes.HAS_MANY) {
           isBtLookup = false;
           const childColumn = await relation.getChildColumn(context);
@@ -499,6 +569,25 @@ export default async function generateLookupSelectQuery({
           );
           if (nestedHmSoftDeleteFilter) {
             selectQb.where(nestedHmSoftDeleteFilter);
+          }
+
+          // INNER-level limit for a nested lookup (HM): restrict this level's
+          // joined rows to the top-N per the previous level's row.
+          if (rootIsPg && nestedLookupColOpt) {
+            const cfg = await loadLookupSortAndLimit(context, lookupColumn);
+            if (cfg.hasConfig && cfg.limitVal > 0) {
+              await applyNestedLookupLevelLimit({
+                qb: selectQb,
+                nestedAlias,
+                nestedRefBaseModel: childBaseModel,
+                corrColName: childColumn.column_name,
+                prevAlias,
+                prevCorrColName: parentColumn.column_name,
+                sorts: cfg.sorts,
+                limitVal: cfg.limitVal,
+                takeLast: cfg.takeLast,
+              });
+            }
           }
         } else if (relationType === RelationTypes.MANY_TO_MANY) {
           const nestedIsSingleTargetV2 = isBtLikeV2Junction(relationCol);
@@ -682,6 +771,25 @@ export default async function generateLookupSelectQuery({
       const subQueryAlias = getAlias();
 
       if (baseModelSqlv2.isPg) {
+        // Per-link ordering (opt-in): when an mm junction Order column is present
+        // (set above), select it into the subquery and ORDER the json_agg by it
+        // so the aggregated value reflects link order. Unchanged otherwise.
+        if (mmLinkOrderRef) {
+          selectQb.select(
+            knex.raw('?? as ??', [mmLinkOrderRef, '__nc_lorder']),
+          );
+          return {
+            builder: knex
+              .select(
+                knex.raw('json_agg(?? ORDER BY ??)::text', [
+                  lookupColumn.id,
+                  '__nc_lorder',
+                ]),
+              )
+              .from(selectQb.as(subQueryAlias)),
+            applyCte,
+          };
+        }
         // alternate approach with array_agg
         return {
           builder: knex

@@ -49,6 +49,10 @@ export const presetErrorCodexMap: Partial<
     message: (id: string) => `Workspace '${id}' not found`,
     code: 404,
   },
+  [NcErrorType.ERR_ORG_NOT_FOUND]: {
+    message: (id: string) => `Org '${id}' not found`,
+    code: 404,
+  },
   [NcErrorType.ERR_BASE_NOT_FOUND]: {
     message: (id: string) => `Base '${id}' not found`,
     code: 404,
@@ -145,6 +149,18 @@ export const presetErrorCodexMap: Partial<
     message: (id: string) => `Dashboard '${id}' not found`,
     code: 404,
   },
+  [NcErrorType.ERR_INTERFACE_NOT_FOUND]: {
+    message: (id: string) => `Interface '${id}' not found`,
+    code: 404,
+  },
+  [NcErrorType.ERR_INTERFACE_PAGE_NOT_FOUND]: {
+    message: (id: string) => `Interface page '${id}' not found`,
+    code: 404,
+  },
+  [NcErrorType.ERR_INTERFACE_PREVIEW_WRITE_BLOCKED]: {
+    message: () => 'Writes are disabled while previewing as another user',
+    code: 403,
+  },
   [NcErrorType.ERR_CHAT_SESSION_NOT_FOUND]: {
     message: (id: string) => `Chat session '${id}' not found`,
     code: 404,
@@ -230,6 +246,10 @@ export const presetErrorCodexMap: Partial<
   },
   [NcErrorType.ERR_SHARED_DASHBOARD_PASSWORD_INVALID]: {
     message: 'Invalid shared dashboard password',
+    code: 403,
+  },
+  [NcErrorType.ERR_SHARED_INTERFACE_PAGE_PASSWORD_INVALID]: {
+    message: 'Invalid shared interface page password',
     code: 403,
   },
   [NcErrorType.ERR_INVALID_ATTACHMENT_JSON]: {
@@ -505,5 +525,20 @@ export const presetErrorCodexMap: Partial<
       message ||
       'This operation is not allowed while a sandbox is active. Make the change in the sandbox instead.',
     code: 403,
+  },
+  [NcErrorType.ERR_SNAPSHOT_BLOCKED]: {
+    message: (message: string) =>
+      message ||
+      'This base is a snapshot and cannot be accessed directly. Restore the snapshot to a new base to view or edit its contents.',
+    code: 403,
+  },
+  [NcErrorType.ERR_CREDIT_PACK_NOT_FOUND]: {
+    message: (id: string) => `Credit pack '${id}' not found`,
+    code: 404,
+  },
+  [NcErrorType.ERR_CREDITS_EXHAUSTED]: {
+    message: (message: string) =>
+      message || 'You have run out of credits. Top up to continue.',
+    code: 402,
   },
 };

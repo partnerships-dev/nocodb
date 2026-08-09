@@ -22,15 +22,57 @@ import { getAliasedSoftDeleteFilter } from '~/helpers/dbHelpers';
 import { NcError } from '~/helpers/ncError';
 import { getDisplayValueOfRefTable } from '~/db/generateLookupSelectQuery';
 import { DBQueryClient } from '~/dbQueryClient';
+import {
+  buildNestedLookupLevelLimit,
+  loadLookupSortAndLimit,
+} from '~/db/lookupSortLimit';
 
 export function ncIsStringHasValue(val: string | undefined | null) {
   return val !== '' && !ncIsUndefined(val) && !ncIsNull(val);
 }
 
+/**
+ * Detect a knex raw / ref value. Dynamic (field-to-field) filters set
+ * `filter.value` to a `knex.ref()` / `knex.raw()` column reference instead of
+ * a scalar literal. Such objects carry `isRawInstance === true`.
+ */
+export function ncIsKnexRawOrRef(val: any): val is Knex.Raw {
+  return (
+    !!val && typeof val === 'object' && (val as any).isRawInstance === true
+  );
+}
+
+/**
+ * Build a `%value%` LIKE pattern where `value` is a column reference
+ * (knex raw / ref) rather than a scalar literal.
+ *
+ * The wildcards must be concatenated in SQL — dialect specific — so the
+ * reference stays a reference. Interpolating it in JS (`` `%${ref}%` ``)
+ * stringifies the reference into a literal, which never matches.
+ */
+export function ncLikePatternForRef(knex: CustomKnex, ref: Knex.Raw): Knex.Raw {
+  const client = knex.clientType();
+  if (client === 'mysql' || client === 'mysql2' || client === 'vitess') {
+    return knex.raw("CONCAT('%', ?, '%')", [ref]);
+  }
+  if (client === 'mssql') {
+    return knex.raw("('%' + ? + '%')", [ref]);
+  }
+  // pg, sqlite3, oracledb, databricks and default support `||` concatenation
+  return knex.raw("('%' || ? || '%')", [ref]);
+}
+
+/**
+ * Lookup / LTAR only: ops that must become `NOT EXISTS (positive op)` instead
+ * of `EXISTS (negative op)` — otherwise a row linked to both a valued and an
+ * unvalued record matches the op and its opposite, and a row with no links
+ * matches neither.
+ */
 export const negatedMapping = {
   nlike: { comparison_op: 'like' },
   neq: { comparison_op: 'eq' },
   blank: { comparison_op: 'notblank' },
+  null: { comparison_op: 'notnull' },
   notchecked: { comparison_op: 'checked' },
   nanyof: { comparison_op: 'anyof' },
   nallof: { comparison_op: 'allof' },
@@ -247,6 +289,39 @@ export async function nestedConditionJoin({
             });
           }
           break;
+      }
+
+      // Per-lookup Limit — INNER level (PG): restrict this nested level's joined
+      // rows to the top-N per the previous level's row, matching the display /
+      // formula builders so all three consumers show the same set. Only BT and
+      // HM nested levels are limited (the display builder does not limit nested
+      // MM levels); the config comes from THIS level's lookup column. Applied as
+      // a deferred clause because `qb` isn't available until the clauses run.
+      if (
+        baseModelSqlv2.isPg &&
+        lookupColumn.uidt === UITypes.Lookup &&
+        (relationType === RelationTypes.HAS_MANY ||
+          relationType === RelationTypes.BELONGS_TO)
+      ) {
+        const cfg = await loadLookupSortAndLimit(context, lookupColumn);
+        if (cfg.hasConfig && cfg.limitVal > 0) {
+          const isHm = relationType === RelationTypes.HAS_MANY;
+          const applier = await buildNestedLookupLevelLimit({
+            nestedAlias: relAlias,
+            nestedRefBaseModel: isHm ? childBaseModel : parentBaseModel,
+            corrColName: isHm
+              ? childColumn.column_name
+              : parentColumn.column_name,
+            prevAlias: alias,
+            prevCorrColName: isHm
+              ? parentColumn.column_name
+              : childColumn.column_name,
+            sorts: cfg.sorts,
+            limitVal: cfg.limitVal,
+            takeLast: cfg.takeLast,
+          });
+          if (applier) clauses.push(applier);
+        }
       }
     }
 

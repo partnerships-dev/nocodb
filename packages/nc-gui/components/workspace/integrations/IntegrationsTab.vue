@@ -42,7 +42,7 @@ const { activeWorkspace } = storeToRefs(useWorkspace())
 
 const { isSyncFeatureEnabled } = storeToRefs(useSyncStore())
 
-const { isEEFeatureBlocked, blockAiIntegrations, showUpgradeToUseAiIntegrations } = useEeConfig()
+const { isEEFeatureBlocked, blockAiIntegrations, showUpgradeToUseAiIntegrations, showEEFeatures } = useEeConfig()
 
 const easterEggToggle = computed(() => isFeatureEnabled(FEATURE_FLAG.INTEGRATIONS))
 
@@ -147,7 +147,8 @@ const getIntegrationsByCategory = (category: IntegrationCategoryType, query: str
     if (i.hidden) return false
 
     // EE-only data sources (e.g. MSSQL, Oracle) are hidden in CE; in EE they're gated by their paid add-on.
-    if (!isEeUI && i.isEeOnly) return false
+    // EE-only sources (MSSQL, Oracle) are hidden in CE and in community mode.
+    if (!showEEFeatures.value && i.isEeOnly) return false
 
     return (
       isOssOnlyAllowed &&
@@ -343,7 +344,7 @@ watch(activeViewTab, (value) => {
             'h-full': !isModal,
           }"
         >
-          <div v-if="integrationListContainerWidth" class="px-8 pt-6">
+          <div v-if="integrationListContainerWidth" class="px-6 pt-4">
             <div
               class="flex justify-end flex-wrap gap-3 m-auto nc-content-max-w"
               :class="{
@@ -440,7 +441,7 @@ watch(activeViewTab, (value) => {
 
           <div
             ref="integrationListRef"
-            class="flex-1 px-8 pb-8 flex flex-col nc-workspace-settings-integrations-list overflow-y-auto nc-scrollbar-thin"
+            class="flex-1 px-6 pb-8 flex flex-col nc-workspace-settings-integrations-list overflow-y-auto nc-scrollbar-thin"
           >
             <div
               v-if="integrationListContainerWidth"

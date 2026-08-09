@@ -99,7 +99,7 @@ const markers: Marker[] = [
 
       const newStyles: MarkdownStyle[] = [...activeStyles, 'mention']
 
-      const displayValue = displayName && displayName.length > 0 ? displayName : email
+      const displayValue = extractUserDisplayNameOrEmail({ display_name: displayName, email })
 
       return {
         tokens: [
@@ -309,7 +309,7 @@ function updateMentionsWithUserData(
       if (foundUser) {
         return {
           ...token,
-          value: `${foundUser.display_name || foundUser.email || id}`,
+          value: `${extractUserDisplayNameOrEmail(foundUser) || id}`,
           mentionData: {
             ...token.mentionData,
             email: foundUser.email,

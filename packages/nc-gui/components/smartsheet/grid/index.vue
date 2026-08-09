@@ -194,6 +194,9 @@ provide(RowHeightInj, rowHeight)
 
 const isPublic = inject(IsPublicInj, ref(false))
 
+// Interface pages open their record-detail sheet instead of the expanded form.
+const interfaceExpandRecord = inject(InterfaceExpandRecordInj, undefined)
+
 provide(ReloadRowDataHookInj, reloadViewDataHook)
 
 const skipRowRemovalOnCancel = ref(false)
@@ -271,6 +274,8 @@ function updateRowIdRoute(rowId: string, path: Array<number> = []) {
 }
 
 function expandForm(row: Row, state?: Record<string, any>, fromToolbar = false, path: Array<number> = []) {
+  if (interfaceExpandRecord?.(row)) return
+
   const rowId = extractPkFromRow(row.row, meta.value?.columns as ColumnType[])
 
   if (!isMobileMode.value && !isPublic.value && expandedFormMode.value === 'panel' && rowId && isCanvasRendering.value) {
@@ -607,6 +612,27 @@ expandedFormPanelRowNavigator.value = {
     }
     const idx = pData.value.findIndex((row: Row) => extractPkFromRow(row.row, cols) === rowId)
     return idx >= 0 ? { index: idx, path: [] } : null
+  },
+  updateCommentCount: (rowId: string, count: number) => {
+    if (isInfiniteScrollingEnabled.value) {
+      const rowCaches = isGroupBy.value ? Array.from(groupDataCache.value.values()).map((g) => g.cachedRows) : [cachedRows]
+
+      for (const cache of rowCaches) {
+        for (const row of cache.value.values()) {
+          if (extractPkFromRow(row.row, meta.value!.columns!) === rowId) {
+            row.rowMeta.commentCount = count
+            syncVisibleData?.()
+            return
+          }
+        }
+      }
+    } else {
+      const currentRowIndex = pData.value.findIndex(
+        (row: Row) => extractPkFromRow(row.row, meta.value?.columns as ColumnType[]) === rowId,
+      )
+      if (currentRowIndex === -1) return
+      pData.value[currentRowIndex]!.rowMeta.commentCount = count
+    }
   },
 }
 

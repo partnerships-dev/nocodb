@@ -5,6 +5,7 @@ import type {
   ChatContentBlock,
   ChatMessageType,
   ChatSessionType,
+  ChatToolProgress,
 } from '~/lib/chat';
 
 export enum EventType {
@@ -23,12 +24,14 @@ export enum EventType {
   TEAM_EVENT = 'event-team',
   WORKFLOW_EVENT = 'event-workflow',
   WORKFLOW_EXECUTION_EVENT = 'event-workflow-execution',
+  INTERFACE_EVENT = 'event-interface',
   PRESENCE_EVENT = 'event-presence',
   CHAT_EVENT = 'event-chat',
   DOCUMENT_EVENT = 'event-document',
   DOCUMENT_COMMENT_EVENT = 'event-document-comment',
   DOCUMENT_SYNC_EVENT = 'event-document-sync',
   SMART_TEXT_EVENT = 'event-smart-text',
+  CREDIT_EVENT = 'event-credit',
 }
 
 /** Client→server socket events for collaborative doc editing (binary Yjs frames). */
@@ -267,6 +270,8 @@ export interface ChatEventPayload extends BaseSocketPayload {
   toolCallId?: string;
   name?: string;
   args?: any;
+  // action: 'tool-progress' — live step update from a long-running tool
+  progress?: ChatToolProgress;
   // action: 'tool-result'
   output?: any;
   isError?: boolean;
@@ -283,6 +288,11 @@ export interface ChatEventPayload extends BaseSocketPayload {
   followUps?: string[];
   // action: 'error'
   error?: string;
+  /** Machine-readable `NcErrorType` when the failure has one (e.g.
+   * `ERR_CREDITS_EXHAUSTED`) — the UI branches on it for recovery CTAs. */
+  code?: string;
+  /** Structured payload of the coded error (remaining balance, period end). */
+  details?: Record<string, unknown>;
   // action: 'session-create' | 'session-update' | 'session-delete'
   session?: ChatSessionType;
   // action: 'user-message'

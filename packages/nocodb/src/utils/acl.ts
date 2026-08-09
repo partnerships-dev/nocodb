@@ -138,6 +138,7 @@ const permissionScopes = {
     'formViewGet',
     'baseGet',
     'tableGet',
+    'refTableGet',
     'attachmentDownload',
     'dataList',
     'linkDataList',
@@ -150,6 +151,7 @@ const permissionScopes = {
     'exportCsv',
     'exportExcel',
     'sortList',
+    'lookupSortList',
     'filterList',
     'baseInfoGet',
     'baseUserMetaUpdate',
@@ -215,6 +217,7 @@ const permissionScopes = {
     'viewColumnUpdate',
     'viewColumnsBulkSetVisibility',
     'sortCreate',
+    'lookupSortCreate',
     'sortUpdate',
     'sortDelete',
     'filterCreate',
@@ -242,6 +245,7 @@ const permissionScopes = {
     'nestedDataList',
     'nestedDataLink',
     'nestedDataUnlink',
+    'nestedDataReorder',
     'nestedListCopyPasteOrDeleteAll',
     'baseUserList',
     'sourceCreate',
@@ -441,6 +445,7 @@ const rolePermissions:
       baseGet: true,
       //table
       tableGet: true,
+      refTableGet: true,
       // attachment
       attachmentDownload: true,
       // data
@@ -458,6 +463,7 @@ const rolePermissions:
 
       // sort & filter
       sortList: true,
+      lookupSortList: true,
       filterList: true,
       baseInfoGet: true,
       baseUserMetaUpdate: true,
@@ -548,6 +554,7 @@ const rolePermissions:
 
       nestedDataLink: true,
       nestedDataUnlink: true,
+      nestedDataReorder: true,
       nestedListCopyPasteOrDeleteAll: true,
       // TODO add ACL with base scope
       // upload: true,
@@ -573,6 +580,7 @@ const rolePermissions:
 
       // Sort/Filter/ViewColumn/View operations for personal views (middleware handles ownership check)
       sortCreate: true,
+      lookupSortCreate: true,
       sortUpdate: true,
       sortDelete: true,
       filterCreate: true,
@@ -813,6 +821,7 @@ export const sourceRestrictions = {
     nestedDataBulkLinkByDisplayValue: true,
     nestedDataUnlink: true,
     nestedDataLink: true,
+    nestedDataReorder: true,
   },
 };
 
@@ -916,6 +925,7 @@ const permissionDescriptions: Record<string, string> = {
   formViewGet: 'view forms',
   baseGet: 'view base details',
   tableGet: 'view table details',
+  refTableGet: 'view minimal details of a linked table',
   attachmentDownload: 'download attachments',
   dataList: 'view data',
   linkDataList: 'view data',
@@ -927,6 +937,7 @@ const permissionDescriptions: Record<string, string> = {
   exportCsv: 'export data to CSV',
   exportExcel: 'export data to Excel',
   sortList: 'view list of sorts',
+  lookupSortList: 'view the sort config of a lookup field',
   filterList: 'view list of filters',
   baseInfoGet: 'view base information',
   baseUserMetaUpdate: 'update user metadata for the base',
@@ -992,6 +1003,7 @@ const permissionDescriptions: Record<string, string> = {
   viewColumnUpdate: 'update view columns',
   viewColumnsBulkSetVisibility: 'bulk update view column visibility',
   sortCreate: 'create a new sort',
+  lookupSortCreate: 'add a sort to a lookup field',
   sortUpdate: 'update an existing sort',
   sortDelete: 'delete a sort',
   filterCreate: 'create a new filter',

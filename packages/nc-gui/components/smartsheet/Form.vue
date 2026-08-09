@@ -1128,7 +1128,7 @@ const updateFieldTitle = (value: string) => {
 
 const handleAutoScrollFormField = (title: string, isSidebar: boolean) => {
   const field = document.querySelector(
-    `${isSidebar ? '.nc-form-field-item-' : '.nc-form-drag-'}${CSS.escape(title?.replaceAll(' ', ''))}`,
+    `${isSidebar ? '.nc-form-field-item-' : '.nc-form-drag-'}${CSS.escape(toSafeClassName(title))}`,
   )
 
   if (field) {
@@ -1502,7 +1502,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                     />
                     <div class="absolute bottom-0 right-0 hidden group-hover:block">
                       <div class="flex items-center space-x-1 m-2">
-                        <NcTooltip :disabled="(isEeUI && showEEFeatures) || isLocked">
+                        <NcTooltip :disabled="showEEFeatures || isLocked">
                           <template #title>
                             <div class="text-center">
                               {{ $t('msg.info.thisFeatureIsOnlyAvailableInEnterpriseEdition') }}
@@ -1625,7 +1625,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                               class="items-center space-x-1 flex-nowrap m-3"
                               :class="formViewData.logo_url ? 'hidden absolute top-0 left-0 group-hover:flex' : 'flex'"
                             >
-                              <NcTooltip :disabled="(isEeUI && showEEFeatures) || isLocked">
+                              <NcTooltip :disabled="showEEFeatures || isLocked">
                                 <template #title>
                                   <div class="text-center">
                                     {{ $t('msg.info.thisFeatureIsOnlyAvailableInEnterpriseEdition') }}
@@ -1891,7 +1891,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                             :key="element.id"
                             class="nc-editable nc-form-focus-element item relative bg-nc-bg-default p-4 lg:p-6"
                             :class="[
-                              `nc-form-drag-${element.title.replaceAll(' ', '')}`,
+                              `nc-form-drag-${toSafeClassName(element.title)}`,
                               {
                                 'rounded-2xl border-2 my-1': isEditable,
                               },
@@ -2374,7 +2374,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                                 </span>
 
                                 <a-switch
-                                  v-if="isEeUI && showEEFeatures"
+                                  v-if="showEEFeatures"
                                   v-e="[`a:form-view:hide-branding`]"
                                   :checked="parseProp(formViewData.meta)?.hide_branding"
                                   size="small"
@@ -2436,7 +2436,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                                     />
                                   </span>
                                   <a-switch
-                                    v-if="isEeUI && showEEFeatures"
+                                    v-if="showEEFeatures"
                                     v-e="[`a:form-view:custom-submit-label`]"
                                     :checked="parseProp(formViewData.meta)?.custom_submit_enabled"
                                     size="small"
@@ -2526,7 +2526,7 @@ const { message: templatedMessage } = useTemplatedMessage(
                                     />
                                   </span>
                                   <a-switch
-                                    v-if="showEEFeatures"
+                                    v-if="isEeUI"
                                     v-e="[`a:form-view:redirect-url`]"
                                     :checked="isOpenRedirectUrl"
                                     size="small"

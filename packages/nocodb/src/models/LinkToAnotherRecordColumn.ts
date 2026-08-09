@@ -33,6 +33,12 @@ export default class LinkToAnotherRecordColumn {
   fk_mm_model_id?: string;
   fk_mm_child_column_id?: string;
   fk_mm_parent_column_id?: string;
+  // Per-link ordering (v2 links only). Two system Order columns on the junction
+  // table, one grouped by each FK: the "child order" column orders rows within
+  // each child (i.e. orders the parents linked to a child), the "parent order"
+  // column orders rows within each parent. Null for v1 links / external sources.
+  fk_mm_child_order_column_id?: string;
+  fk_mm_parent_order_column_id?: string;
   fk_related_model_id?: string;
 
   // following columns will be only used for cross base link and for normal link, these will be null
@@ -103,6 +109,40 @@ export default class LinkToAnotherRecordColumn {
       },
       ncMeta,
     ));
+  }
+
+  // The junction Order column grouped by the child FK (orders parents per child).
+  public async getMMChildOrderColumn(
+    context: NcContext,
+    ncMeta = Noco.ncMeta,
+  ): Promise<Column | null> {
+    if (!this.fk_mm_child_order_column_id) return null;
+    const { mmContext } = this.getRelContext({
+      ...context,
+      base_id: this.base_id,
+    });
+    return Column.get(
+      mmContext,
+      { colId: this.fk_mm_child_order_column_id },
+      ncMeta,
+    );
+  }
+
+  // The junction Order column grouped by the parent FK (orders children per parent).
+  public async getMMParentOrderColumn(
+    context: NcContext,
+    ncMeta = Noco.ncMeta,
+  ): Promise<Column | null> {
+    if (!this.fk_mm_parent_order_column_id) return null;
+    const { mmContext } = this.getRelContext({
+      ...context,
+      base_id: this.base_id,
+    });
+    return Column.get(
+      mmContext,
+      { colId: this.fk_mm_parent_order_column_id },
+      ncMeta,
+    );
   }
 
   public async getParentColumn(
@@ -192,6 +232,8 @@ export default class LinkToAnotherRecordColumn {
       'fk_mm_model_id',
       'fk_mm_child_column_id',
       'fk_mm_parent_column_id',
+      'fk_mm_child_order_column_id',
+      'fk_mm_parent_order_column_id',
       'fk_target_view_id',
       'fk_display_value_column_id',
       'ur',
@@ -220,10 +262,14 @@ export default class LinkToAnotherRecordColumn {
     table: Model = undefined,
     ncMeta = Noco.ncMeta,
   ) {
-    await table?.getViews(context);
-    const viewId = this.fk_target_view_id ?? table?.views?.[0]?.id ?? '';
-    if (!viewId) return;
-    return await View.get(context, viewId, false, ncMeta);
+    if (this.fk_target_view_id) {
+      return View.get(context, this.fk_target_view_id, false, ncMeta);
+    }
+    if (!table?.id) return;
+    // Fall back to the table's default view — the first collaborative GRID
+    // view (cached) — not the raw index-0 view, which is unordered and can be
+    // another user's personal view.
+    return View.getFirstCollaborativeView(context, table.id, ncMeta);
   }
 
   public static async read(

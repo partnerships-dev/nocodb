@@ -55,6 +55,13 @@ export enum TeamUserRoles {
   OWNER = 'owner',
 }
 
+export enum InterfaceRoles {
+  EDITOR = 'interface-editor',
+  COMMENTER = 'interface-commenter',
+  VIEWER = 'interface-viewer',
+  NO_ACCESS = 'interface-no-access',
+}
+
 export enum AppEvents {
   PROJECT_CREATE = 'base.create',
   PROJECT_INVITE = 'base.invite',
@@ -292,6 +299,7 @@ export enum AppEvents {
   SNAPSHOT_CREATE = 'snapshot.create',
   SNAPSHOT_DELETE = 'snapshot.delete',
   SNAPSHOT_RESTORE = 'snapshot.restore',
+  SNAPSHOT_SCHEDULE_UPDATE = 'snapshot.schedule.update',
 
   DATA_EXPORT = 'data.export',
   DATA_IMPORT = 'data.import',
@@ -325,6 +333,27 @@ export enum AppEvents {
   WIDGET_UPDATE = 'widget.update',
   WIDGET_DELETE = 'widget.delete',
   WIDGET_DUPLICATE = 'widget.duplicate',
+
+  INTERFACE_CREATE = 'interface.create',
+  INTERFACE_UPDATE = 'interface.update',
+  INTERFACE_DELETE = 'interface.delete',
+  INTERFACE_DUPLICATE = 'interface.duplicate',
+  INTERFACE_PUBLISH = 'interface.publish',
+
+  INTERFACE_PAGE_CREATE = 'interface.page.create',
+  INTERFACE_PAGE_UPDATE = 'interface.page.update',
+  INTERFACE_PAGE_DELETE = 'interface.page.delete',
+  INTERFACE_PAGE_DUPLICATE = 'interface.page.duplicate',
+
+  SHARED_INTERFACE_PAGE_CREATE = 'shared.interface.page.create',
+  SHARED_INTERFACE_PAGE_UPDATE = 'shared.interface.page.update',
+  SHARED_INTERFACE_PAGE_DELETE = 'shared.interface.page.delete',
+
+  INTERFACE_DATA_EXPORT = 'interface.data.export',
+
+  INTERFACE_USER_INVITE = 'interface.user.invite',
+  INTERFACE_USER_UPDATE = 'interface.user.update',
+  INTERFACE_USER_DELETE = 'interface.user.delete',
 
   PERMISSION_CREATE = 'permission.create',
   PERMISSION_UPDATE = 'permission.update',
@@ -405,6 +434,10 @@ export enum AppEvents {
   MANAGED_APP_UPDATE_START = 'managedApp.update.start',
   MANAGED_APP_UPDATE_COMPLETE = 'managedApp.update.complete',
   MANAGED_APP_UPDATE_FAIL = 'managedApp.update.fail',
+
+  CREDIT_GRANT = 'credit.grant',
+  CREDIT_TOPUP = 'credit.topup',
+  CREDITS_EXHAUSTED = 'credit.exhausted',
 }
 
 export enum ClickhouseTables {
@@ -571,6 +604,29 @@ export const OrderedProjectRoles = [
   ProjectRoles.NO_ACCESS,
 ];
 
+export const InterfaceRolesToProjectRoles = {
+  [InterfaceRoles.EDITOR]: ProjectRoles.EDITOR,
+  [InterfaceRoles.COMMENTER]: ProjectRoles.COMMENTER,
+  [InterfaceRoles.VIEWER]: ProjectRoles.VIEWER,
+  [InterfaceRoles.NO_ACCESS]: ProjectRoles.NO_ACCESS,
+};
+
+// Base roles below creator map onto interface roles for base-role-derived
+// interface access; owner/creator are builders and are handled separately.
+export const ProjectRolesToInterfaceRoles = {
+  [ProjectRoles.EDITOR]: InterfaceRoles.EDITOR,
+  [ProjectRoles.COMMENTER]: InterfaceRoles.COMMENTER,
+  [ProjectRoles.VIEWER]: InterfaceRoles.VIEWER,
+  [ProjectRoles.NO_ACCESS]: InterfaceRoles.NO_ACCESS,
+};
+
+export const OrderedInterfaceRoles = [
+  InterfaceRoles.EDITOR,
+  InterfaceRoles.COMMENTER,
+  InterfaceRoles.VIEWER,
+  InterfaceRoles.NO_ACCESS,
+];
+
 export enum APIContext {
   VIEW_COLUMNS = 'fields',
   FILTERS = 'filters',
@@ -688,6 +744,26 @@ export enum ViewLockType {
   Collaborative = 'collaborative',
 }
 
+// Calendar event-display themes — how each event/record is drawn in the grid.
+// Persisted per calendar view in `meta.event_display_theme`. `BORDERED` is the
+// default (and the only look prior to this feature).
+export enum CalendarEventTheme {
+  // Bordered chip: border + faint background tint + left colour bar (default).
+  BORDERED = 'bordered',
+  // Borderless row: colour dot + time + title on a transparent background.
+  DOT = 'dot',
+  // Whole chip filled with the event accent colour, contrast (white) text.
+  SOLID = 'solid',
+  // No border/fill — just a thicker left colour bar + text.
+  MINIMAL = 'minimal',
+  // Plain text with the time rendered as a small colour pill/badge.
+  PILL = 'pill',
+}
+
+export const CALENDAR_EVENT_THEMES = Object.values(CalendarEventTheme);
+
+export const DEFAULT_CALENDAR_EVENT_THEME = CalendarEventTheme.BORDERED;
+
 export enum PublicAttachmentScope {
   WORKSPACEPICS = 'workspacePics',
   PROFILEPICS = 'profilePics',
@@ -792,4 +868,8 @@ export enum OperationSource {
   WORKFLOW = 'workflow',
   PLUGINS = 'plugins',
   SYNC = 'sync',
+  // Editor-accessible "fetch via URL" data import (axiosRequestMake).
+  // Kept separate from HOOKS so the webhook SSRF bypass (NC_ALLOW_LOCAL_HOOKS)
+  // does not also loosen the lower-privilege data-import path.
+  DATA_IMPORT = 'data_import',
 }

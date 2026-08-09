@@ -24,6 +24,10 @@ import { sanitize } from '~/helpers/sqlSanitize';
 import Filter from '~/models/Filter';
 import { getAliasGenerator } from '~/utils';
 import { handleCurrentUserFilter } from '~/helpers/conditionHelpers';
+import {
+  ncIsKnexRawOrRef,
+  ncLikePatternForRef,
+} from '~/db/field-handler/utils/handlerUtils';
 
 export default async function conditionV2(
   baseModelSqlv2: IBaseModelSqlV2,
@@ -125,6 +129,17 @@ function isFilterDisabled(
   supportToggle: boolean,
 ): boolean {
   return supportToggle && (filter.enabled === false || filter.enabled === 0);
+}
+
+// Resolve a btw/nbtw filter value into the [lower, upper] range that
+// whereBetween/whereNotBetween expect. The value is normally a "lower,upper"
+// CSV string, but a non-string value (array/number) can reach here via
+// filterArrJson or the numeric coercion in the clause builder — guarding here
+// keeps `.split` from throwing at query-compile time. An array is used as-is;
+// anything else is stringified before splitting.
+function extractArray(val: unknown): [Knex.Value, Knex.Value] {
+  const arr = Array.isArray(val) ? val : `${val ?? ''}`.split(',');
+  return [arr[0], arr[1]];
 }
 
 const parseConditionV2 = async (
@@ -509,7 +524,26 @@ const parseConditionV2 = async (
               break;
             case 'like':
               // JSON / Attachment route to FieldHandler above.
-              if (!val) {
+              // `!customWhereClause` — on the computed-column (Formula/Rollup)
+              // pass `val` holds the compiled expression, not a dynamic
+              // field-to-field reference. Without this guard the dynamic branch
+              // shadows the Formula operand swap below and inverts the
+              // comparison into `'<term>' like '%<formula>%'`.
+              if (!customWhereClause && ncIsKnexRawOrRef(val)) {
+                // Dynamic field-to-field: val is a column reference. Concatenate
+                // the wildcards in SQL so the reference isn't stringified into a
+                // literal (which would never match).
+                const pattern = ncLikePatternForRef(knex, val);
+                if (knex.clientType() === 'pg') {
+                  qb = qb.where(knex.raw('??::text ilike ?', [field, pattern]));
+                } else if (knex.clientType() === 'oracledb') {
+                  qb = qb.where(
+                    knex.raw('UPPER(??) like UPPER(?)', [field, pattern]),
+                  );
+                } else {
+                  qb = qb.where(knex.raw('?? like ?', [field, pattern]));
+                }
+              } else if (!val) {
                 // val is empty -> all values including empty strings but NULL
                 qb.where(field, '');
                 qb.orWhereNotNull(field);
@@ -536,7 +570,30 @@ const parseConditionV2 = async (
               break;
             case 'nlike':
               // JSON / Attachment route to FieldHandler above.
-              if (!val) {
+              // See the `like` branch for why customWhereClause is excluded.
+              if (!customWhereClause && ncIsKnexRawOrRef(val)) {
+                // Dynamic field-to-field: val is a column reference. Concatenate
+                // the wildcards in SQL so the reference isn't stringified into a
+                // literal (which would never match).
+                const pattern = ncLikePatternForRef(knex, val);
+                qb.where((nestedQb) => {
+                  if (knex.clientType() === 'pg') {
+                    nestedQb.where(
+                      knex.raw('??::text not ilike ?', [field, pattern]),
+                    );
+                  } else if (knex.clientType() === 'oracledb') {
+                    nestedQb.whereNot(
+                      knex.raw('UPPER(??) like UPPER(?)', [field, pattern]),
+                    );
+                  } else {
+                    nestedQb.whereNot(knex.raw('?? like ?', [field, pattern]));
+                  }
+                  // a non-matching (non-empty) filter should still surface
+                  // empty/null values
+                  nestedQb.orWhere(field, '');
+                  nestedQb.orWhereNull(field);
+                });
+              } else if (!val) {
                 // val is empty -> all values including NULL but empty strings
                 qb.whereNot(field, '');
                 qb.orWhereNull(field);
@@ -807,21 +864,14 @@ const parseConditionV2 = async (
               });
               break;
             case 'btw':
-              // `val` is normally a "lower,upper" CSV string, but a non-string
-              // value (array/number) can reach here via filterArrJson or the
-              // numeric coercion above — guard like the anyof/allof branch so
-              // `.split` never throws at query-compile time. An array is passed
-              // straight through (whereBetween already wants [lower, upper]).
-              qb = qb.whereBetween(
-                field,
-                Array.isArray(val) ? val : `${val ?? ''}`.split(','),
-              );
+              // `val` is normally a "lower,upper" CSV string; extractArray
+              // guards against a non-string value reaching `.split` and passes
+              // an array straight through (whereBetween already wants
+              // [lower, upper]).
+              qb = qb.whereBetween(field, extractArray(val));
               break;
             case 'nbtw':
-              qb = qb.whereNotBetween(
-                field,
-                Array.isArray(val) ? val : `${val ?? ''}`.split(','),
-              );
+              qb = qb.whereNotBetween(field, extractArray(val));
               break;
             // `isWithin` is date-only (pastWeek/Month/Year/NumberOfDays and
             // nextWeek/Month/Year/NumberOfDays). DateTime/Date/CreatedTime/

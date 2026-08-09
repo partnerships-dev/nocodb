@@ -1,4 +1,4 @@
-import UITypes, { isLinksOrLTAR, isNumericCol } from './UITypes';
+import UITypes, { isLinksOrLTAR, isNumericCol, isVirtualCol } from './UITypes';
 import { RelationTypes, RolesObj, RolesType } from './globals';
 import { ClientType } from './enums';
 import {
@@ -66,7 +66,7 @@ const stringifyRolesObj = (roles?: RolesObj | null): string => {
 const getAvailableRollupForColumn = (column: ColumnType) => {
   if ([UITypes.Formula].includes(column.uidt as UITypes)) {
     return getAvailableRollupForFormulaType(
-      (column.colOptions as FormulaType as any).parsed_tree?.dataType ??
+      (column.colOptions as FormulaType as any)?.parsed_tree?.dataType ??
         FormulaDataTypes.UNKNOWN
     );
   } else {
@@ -163,6 +163,29 @@ const getAvailableRollupForFormulaType = (type: FormulaDataTypes) => {
       return ['count'];
     }
   }
+};
+
+/**
+ * Whether a column in the linked table can be the target of a Rollup.
+ * The listed virtual types are the ones `genRollupSelectv2` lowers to a
+ * correlated subquery; every other virtual type has no column to aggregate,
+ * so rolling it up emits broken SQL.
+ */
+const isRollupAggregatableColumn = (
+  col: UITypes | { uidt: UITypes | string }
+) => {
+  const uidt = (typeof col === 'object' ? col?.uidt : col) as UITypes;
+  return (
+    !isVirtualCol(uidt) ||
+    [
+      UITypes.Formula,
+      UITypes.Rollup,
+      UITypes.CreatedTime,
+      UITypes.CreatedBy,
+      UITypes.LastModifiedTime,
+      UITypes.LastModifiedBy,
+    ].includes(uidt)
+  );
 };
 
 /** Rollup functions that always return integer values — no decimal precision needed */
@@ -296,6 +319,7 @@ export {
   getAvailableRollupForUiType,
   getAvailableRollupForFormulaType,
   getRenderAsTextFunForUiType,
+  isRollupAggregatableColumn,
   integerRollupFunctions,
   integerPreservingRollupFunctions,
   isIntegerUiType,

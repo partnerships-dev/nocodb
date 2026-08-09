@@ -33,7 +33,6 @@ import {
   LongTextAiMetaProp,
   NcApiVersion,
   NcErrorType,
-  ncIsBoolean,
   ncIsNull,
   ncIsNullOrUndefined,
   ncIsObject,
@@ -344,6 +343,7 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       ignoreRls = false,
       fk_display_value_column_id,
       skipPublicRedaction = false,
+      applyViewFilters = false,
     }: {
       ignoreView?: boolean;
       getHiddenColumn?: boolean;
@@ -354,6 +354,10 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       ignoreRls?: boolean;
       fk_display_value_column_id?: string | null;
       skipPublicRedaction?: boolean;
+      // Also apply the view's row filters, so the record is only returned when
+      // visible in the view. Opt-in: the public shared-view checks rely on it as
+      // the anonymous caller's access boundary.
+      applyViewFilters?: boolean;
     } = {},
   ): Promise<any> {
     const qb = this.dbDriver(this.tnPath);
@@ -399,6 +403,23 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       );
     }
 
+    // Mirrors list()/count(): a record filtered out of the view is not visible.
+    if (applyViewFilters && !ignoreView && this.viewId) {
+      await conditionV2(
+        this,
+        [
+          new Filter({
+            children:
+              (await Filter.rootFilterList(this.context, {
+                viewId: this.viewId,
+              })) || [],
+            is_group: true,
+          }),
+        ],
+        qb,
+      );
+    }
+
     // Exclude soft-deleted records
     const softDeleteFilterReadByPk = await this.getSoftDeleteFilter();
     if (softDeleteFilterReadByPk) {
@@ -429,6 +450,9 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       return this.readByPk(id, true, query, {
         apiVersion,
         skipPublicRedaction,
+        // Must be re-forwarded: it is the caller's row-visibility boundary, so
+        // dropping it here would make the retry fail open.
+        applyViewFilters,
       });
     }
 
@@ -986,6 +1010,11 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
     }
 
     // if limitOverride is provided, use it as limit for the query (for internal usage eg. calendar, export)
+    // NOTE: an explicit `limitOverride: 0` is treated the same as "not provided"
+    // here (falls through to the default page size) — every current caller
+    // passes a positive length (chunk/batch sizes), so this hasn't mattered,
+    // but it's pinned by a test in interface-data-viz.test.ts
+    // (tableGanttDataList's `limit=0` case) that depends on this behavior.
     if (!ignorePagination) {
       if (!limitOverride) {
         applyPaginate(qb, rest);
@@ -3902,6 +3931,7 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
     chunkSize?: number;
     apiVersion?: NcApiVersion;
     args?: Record<string, any>;
+    ignoreRls?: boolean;
     extractOnlyPrimaries?: boolean;
     deletedOnly?: boolean;
     fk_display_value_column_id?: string | null;
@@ -3929,6 +3959,7 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
         {
           limitOverride: chunk.length,
           ignoreViewFilterAndSort: true,
+          ignoreRls: args.ignoreRls,
           deletedOnly: args.deletedOnly,
         },
       );
@@ -4082,7 +4113,9 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       const dt = (col?.dt || '').toLowerCase();
       return dayjs(val)
         .utc()
-        .format(dt === 'date' ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD HH:mm:ss.SSS');
+        .format(
+          dt === 'date' ? 'YYYY-MM-DD HH:mm:ss' : 'YYYY-MM-DD HH:mm:ss.SSS',
+        );
     }
     if (isMssql) {
       // T-SQL `datetime` / `datetime2` types reject the `+00:00` offset
@@ -4140,6 +4173,8 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       undo?: boolean;
       apiVersion?: NcApiVersion;
       onInsertedPks?: (pks: (string | number)[]) => void;
+      /** Consumed by the EE override to skip per-field edit-permission checks. */
+      skipPermissionCheck?: boolean;
     },
   ) {
     return await baseModelInsert(this).bulk(datas, params);
@@ -5185,6 +5220,9 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
     req: NcRequest,
     params?: {
       allowSystemColumn?: boolean;
+      // Honored by the EE override (skips the TABLE_RECORD_ADD check for trusted
+      // internal copies — duplication / snapshot / import). No-op in CE.
+      skipPermissionCheck?: boolean;
     },
   ): Promise<void> {
     const { allowSystemColumn = false } = params || {};
@@ -8270,6 +8308,24 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
     return addOrRemoveLinks(this).removeLinks(params);
   }
 
+  async reorderLink(params: {
+    cookie?: any;
+    colId: string;
+    rowId: string | number;
+    childId: string | number;
+    before?: string | number | null;
+  }) {
+    await this.checkPermission({
+      entity: PermissionEntity.FIELD,
+      entityId: params.colId,
+      permission: PermissionKey.RECORD_FIELD_EDIT,
+      user: params.cookie?.user,
+      req: params.cookie,
+    });
+
+    return addOrRemoveLinks(this).reorderLink(params);
+  }
+
   async ooRead(
     { colId, id }: { colId; id; apiVersion?: NcApiVersion },
     _args: { limit?; offset?; fieldSet?: Set<string> } = {},
@@ -8707,6 +8763,9 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
       before?: string;
       undo?: boolean;
       allowSystemColumn?: boolean;
+      // Consumed by the EE override to skip per-field edit-permission checks
+      // on trusted internal data-load paths (duplication / snapshot / import).
+      skipPermissionCheck?: boolean;
     },
   ): Promise<void> {
     const runAfterForLoop = [];
@@ -9191,11 +9250,19 @@ class BaseModelSqlv2 implements IBaseModelSqlV2 {
           data[column.column_name] = JSON.stringify(data[column.column_name]);
         }
       } else if (UITypes.MultiSelect === column.uidt) {
-        if (
-          data[column.column_name] &&
-          Array.isArray(data[column.column_name])
-        ) {
-          data[column.column_name] = data[column.column_name].join(',');
+        const value = data[column.column_name];
+        if (value !== undefined && value !== null && value !== '') {
+          // normalize to array (option titles cannot contain commas — validated on option create)
+          let vals = Array.isArray(value) ? value : `${value}`.split(',');
+
+          // when the column is alphabetized, persist selected values in alphabetical order
+          if (column.meta?.isAlphabetized === true) {
+            vals = [...vals].sort((a, b) =>
+              `${a ?? ''}`.localeCompare(`${b ?? ''}`),
+            );
+          }
+
+          data[column.column_name] = vals.join(',');
         }
       } else if (isAIPromptCol(column) && !extra?.raw) {
         if (data[column.column_name]) {

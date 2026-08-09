@@ -88,9 +88,9 @@ const FEATURES = [
     id: 'attachment_carousel_comments',
     title: 'Comments in attachment carousel',
     description: 'Enable comments in attachment carousel.',
-    enabled: false,
-    version: 1,
-    isEngineering: true,
+    enabled: true,
+    version: 2,
+    isEngineering: false,
   },
   {
     id: 'cross_base_link',
@@ -195,6 +195,15 @@ const FEATURES = [
     version: 3,
     isEngineering: false,
   },
+  {
+    id: 'credit_usage_overview',
+    title: 'Credit usage overview',
+    description: 'Show the credit usage chart and activity list on the billing page.',
+    enabled: false,
+    version: 1,
+    isEngineering: true,
+    isEE: true,
+  },
 ] as const
 
 export const FEATURE_FLAG = Object.fromEntries(FEATURES.map((feature) => [feature.id.toUpperCase(), feature.id])) as Record<
@@ -275,7 +284,7 @@ export const useBetaFeatureToggle = createSharedComposable(() => {
 
     const feature = featureMap.value[id]
 
-    if (feature && 'isEE' in feature && feature.isEE && !(isEeUI && showEEFeatures.value)) {
+    if (feature && 'isEE' in feature && feature.isEE && !showEEFeatures.value) {
       return false
     }
 

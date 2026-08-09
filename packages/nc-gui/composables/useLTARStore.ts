@@ -1,8 +1,10 @@
-import type { ColumnType, LinkToAnotherRecordType, PaginatedType, RequestParams, TableType } from 'nocodb-sdk'
+import type { ColumnType, LinkToAnotherRecordType, LookupType, PaginatedType, RequestParams, TableType } from 'nocodb-sdk'
 import {
   RelationTypes,
   UITypes,
+  ViewTypes,
   dateFormats,
+  getFirstNonPersonalView,
   hideExtraFieldsMetaKey,
   isBtLikeV2Junction,
   isDateOrDateTimeCol,
@@ -69,6 +71,8 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
     const { getMeta, getMetaByKey, getPartialMeta, metas } = useMetas()
 
     const { base, isSharedBase } = storeToRefs(useBase())
+
+    const { isPg } = useBase()
 
     const { getBaseRoles } = useBases()
 
@@ -137,12 +141,19 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
     const excludedLinkedState = ref<Map<number, boolean>>(new Map())
     const excludedLoadingState = ref<Map<number, boolean>>(new Map())
 
+    // Client-side session guard for the excluded-list search: a slow, superseded
+    // response is dropped instead of overwriting the current search term's results.
+    const excludedSearch = useQuerySession()
+
     // Children list (linked items) cache
     const childrenCachedRows = ref<Map<number, Record<string, any>>>(new Map())
     const childrenCachedTotalRows = ref(0)
     const childrenChunkStates = ref<Array<'loading' | 'loaded' | undefined>>([])
     const childrenCachedLinkedState = ref<Map<number, boolean>>(new Map())
     const childrenCachedLoadingState = ref<Map<number, boolean>>(new Map())
+
+    // Client-side session guard for the children-list search (see excludedSearch).
+    const childrenSearch = useQuerySession()
 
     const newRowState = reactive({
       state: null,
@@ -172,6 +183,13 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
     const { t } = useI18n()
 
     const isPublic: Ref<boolean> = inject(IsPublicInj, ref(false))
+
+    // Interface page adapter — when present, every base-scoped LTAR call in
+    // this store re-routes through the page-scoped internal ops: interface
+    // collaborators may hold no base role, so the raw endpoints 403 with
+    // empty roles. Builders in the same tree take the identical route (the
+    // ops clear the plain ACL for base roles too).
+    const interfaceDataApi = inject(InterfacePageDataInj, undefined)
 
     const colOptions = computed(() => column.value?.colOptions as LinkToAnotherRecordType)
 
@@ -203,6 +221,12 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
 
     // Check if linked table is accessible based on is_private flag from API response only
     const isLinkedTableAccessible = computed(() => {
+      // Interface pages never surface the data-app expanded form for a linked
+      // record (nor create-related-record): the related table sits outside
+      // the page surface, and its raw reads/comments 403 for interface
+      // collaborators. This also drops the picker's extra-field columns,
+      // which only serve "-" there (responses are pk + display value).
+      if (interfaceDataApi) return false
       if (!colOptions.value?.fk_related_model_id) return true
       // Check if table is marked as private from API response
       return !(relatedTableMeta.value as any)?.is_private
@@ -249,15 +273,27 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
           await getMeta(relatedBaseId, tableId, false, false, true)
         } catch {}
       }
-      if (!metas.value[metaKey]) {
-        await getPartialMeta(relatedBaseId, colId, tableId)
+      if (!metas.value[metaKey] && !interfaceDataApi) {
+        await getPartialMeta(relatedBaseId, colId, tableId, {
+          workspaceId: (column.value as any)?.fk_workspace_id,
+          baseId: column.value?.base_id,
+        })
       }
 
       if (isPublic.value) return
 
+      // Interface pages: the projected page meta pre-seeds one level of
+      // related metas, and the target view's column list rides a base-scoped
+      // op (`viewColumnList`) — skip it and render from the related meta's
+      // display value instead.
+      if (interfaceDataApi) return
+
       await nextTick()
 
-      const viewId = colOptions.value.fk_target_view_id ?? relatedTableMeta.value?.views?.[0]?.id ?? ''
+      const viewId =
+        colOptions.value.fk_target_view_id ??
+        getFirstNonPersonalView(relatedTableMeta.value?.views ?? [], { includeViewType: ViewTypes.GRID })?.id ??
+        ''
       if (!viewId) return
 
       try {
@@ -357,12 +393,23 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
           return !isSystemColumn(col) && !isPrimary(col) && !isLinksOrLTAR(col) && !isAttachment(col) && !isLookup(col)
         })
 
-        const sortedFields = filteredFields.sort((a, b) => {
-          if (isPublic.value) {
-            return (a.meta?.defaultViewColOrder ?? Infinity) - (b.meta?.defaultViewColOrder ?? Infinity)
-          }
+        // Resolve a stable sort order for each extra field:
+        //   1. the target view's column order — authoritative when loaded
+        //   2. else the field's default-view order — always present on meta
+        // Public views never load target-view columns, so they use (2). Cross-base
+        // links can also end up with no target-view columns (they load from the
+        // external base and may come back empty), and without a fallback every
+        // field resolved to Infinity — `Infinity - Infinity` is NaN, which makes
+        // Array.sort bail and surface raw table-creation order (the reported
+        // "notes / model / old-values on top instead of the display fields" bug).
+        const fieldOrder = (col: ColumnType) => {
+          const viewOrder = isPublic.value ? undefined : targetViewColumnsById.value[col.id!]?.order
+          return viewOrder ?? col.meta?.defaultViewColOrder ?? Infinity
+        }
 
-          return (targetViewColumnsById.value[a.id!]?.order ?? Infinity) - (targetViewColumnsById.value[b.id!]?.order ?? Infinity)
+        const sortedFields = filteredFields.sort((a, b) => {
+          const diff = fieldOrder(a) - fieldOrder(b)
+          return Number.isNaN(diff) ? 0 : diff
         })
 
         // When a custom display value is set, prepend the original PV as the first extra field
@@ -388,8 +435,26 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       ].filter((c) => c)
     })
 
+    // In a form, a Lookup that resolves through this link can be a "Show on
+    // conditions" source (see buildFormConditionSourceColumns). Its value is read
+    // client-side off the linked record held in form state, so the lookup's target
+    // column must be loaded onto that record here — otherwise the picker's limited
+    // field set omits it and the condition can never resolve. Only target column ids
+    // are added to the API `fields` param; the dropdown/display set is unchanged.
+    const formConditionLookupTargetColIds = computed(() => {
+      const linkColId = column.value?.id
+      if (!isForm.value || !linkColId) return [] as string[]
+
+      return (meta.value?.columns || [])
+        .filter((c) => c.uidt === UITypes.Lookup && (c.colOptions as LookupType)?.fk_relation_column_id === linkColId)
+        .map((c) => (c.colOptions as LookupType)?.fk_lookup_column_id)
+        .filter((id): id is string => !!id)
+    })
+
     const requiredFieldsToLoad = computed(() => {
-      return Array.from(new Set(fieldsToLoad.value?.map((f) => f.id as string)))
+      return Array.from(
+        new Set([...(fieldsToLoad.value?.map((f) => f.id as string) || []), ...formConditionLookupTargetColIds.value]),
+      )
     })
 
     // extract external base roles if cross base link
@@ -522,6 +587,10 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
 
     const loadChildrenExcludedList = async (activeState?: any, resetOffset = false) => {
       if (activeState) newRowState.state = activeState
+      // Snapshot the current query session; if the query changes while this load
+      // is in flight the response is discarded rather than overwriting the newer
+      // search's results.
+      const req = excludedSearch.track()
       try {
         let offset =
           childrenExcludedListPagination.size * (childrenExcludedListPagination.page - 1) - childrenExcludedOffsetCount.value
@@ -533,6 +602,8 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         }
         isChildrenExcludedLoading.value = true
         const where = getWhereClause(childrenExcludedListPagination.query)
+
+        let result: any
 
         if (isPublic.value) {
           const router = useRouter()
@@ -547,7 +618,7 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
             row = await sanitizeRowData({ ...(formState?.value || {}), ...(additionalState?.value || {}) })
           }
 
-          childrenExcludedList.value = await $api.public.dataRelationList(
+          result = await $api.public.dataRelationList(
             route.value.params.viewId as string,
             column.value.id,
             {},
@@ -570,22 +641,28 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         } else if (isNewRow?.value) {
           const linkRowData = await sanitizeRowData(row.value.row)
 
-          childrenExcludedList.value = await $api.internal.getOperation(
-            (column.value as any).fk_workspace_id!,
-            column.value!.base_id!,
-            {
-              operation: 'linkDataList',
-              limit: childrenExcludedListPagination.size,
-              offset,
-              where,
-              columnId: column.value.fk_column_id || column.value.id,
-              linkRowData: JSON.stringify(linkRowData),
-            },
-          )
+          result = await $api.internal.getOperation((column.value as any).fk_workspace_id!, column.value!.base_id!, {
+            operation: 'linkDataList',
+            limit: childrenExcludedListPagination.size,
+            offset,
+            where,
+            columnId: column.value.fk_column_id || column.value.id,
+            linkRowData: JSON.stringify(linkRowData),
+          })
           const ids = new Set(childrenList.value?.list?.map((item) => item.Id) ?? [])
-          if (childrenExcludedList.value.list && ids.size) {
-            childrenExcludedList.value.list = childrenExcludedList.value.list.filter((item) => !ids.has(item.Id))
+          if (result.list && ids.size) {
+            result.list = result.list.filter((item: Record<string, any>) => !ids.has(item.Id))
           }
+        } else if (interfaceDataApi?.nestedExcludedList) {
+          // Interface pages — the page-scoped picker op (pk + display value,
+          // server-composed display-value search, grant-authorized).
+          result = await interfaceDataApi.nestedExcludedList({
+            rowId: rowId.value,
+            columnId: column.value.id,
+            limit: childrenExcludedListPagination.size,
+            offset,
+            search: childrenExcludedListPagination.query || undefined,
+          })
         } else {
           // extract changed data and include with the api call if any
           let changedRowData
@@ -600,7 +677,7 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
             }
           } catch {}
 
-          childrenExcludedList.value = await $api.dbTableRow.nestedChildrenExcludedList(
+          result = await $api.dbTableRow.nestedChildrenExcludedList(
             NOCO,
             meta.value?.base_id ?? baseId,
             meta.value.id,
@@ -616,6 +693,12 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
             } as any,
           )
         }
+
+        // A newer search superseded this request while it was in flight — drop the
+        // stale response so it can't replace the current term's results/loading state.
+        if (req.isStale()) return
+
+        childrenExcludedList.value = result
 
         childrenExcludedList.value?.list.forEach((row: Record<string, any>, index: number) => {
           isChildrenExcludedListLinked.value[index] = false
@@ -672,12 +755,21 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
 
         message.error(`${t('msg.error.failedToLoadList')}: ${error.message}`)
       } finally {
-        isChildrenExcludedLoading.value = false
+        // Only the request matching the active id owns the loading flag — a stale
+        // one clearing it would falsely end the current search's loading state.
+        if (req.isCurrent()) {
+          isChildrenExcludedLoading.value = false
+        }
       }
     }
 
     const loadChildrenList = async (resetOffset = false, activeState: any = undefined, limit: number | undefined = undefined) => {
       if (activeState) newRowState.state = activeState
+
+      // Snapshot the current query session; if the query changes while this load
+      // is in flight the response is discarded rather than overwriting the newer
+      // search's results.
+      const req = childrenSearch.track()
 
       try {
         isChildrenLoading.value = true
@@ -714,8 +806,10 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         } else {
           const where = getWhereClause(childrenListPagination.query)
 
+          let result: any
+
           if (isPublic.value) {
-            childrenList.value = await $api.public.dataNestedList(
+            result = await $api.public.dataNestedList(
               sharedView.value?.uuid as string,
               encodeURIComponent(rowId.value),
               type.value as RelationTypes,
@@ -731,8 +825,18 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
                 },
               },
             )
+          } else if (interfaceDataApi?.nestedList) {
+            // Interface pages — page-scoped linked-record list (pk + display
+            // value, server-composed display-value search, grant-authorized).
+            result = await interfaceDataApi.nestedList({
+              rowId: rowId.value,
+              columnId: column.value.id,
+              limit: limit ?? childrenListPagination.size,
+              offset,
+              search: childrenListPagination.query || undefined,
+            })
           } else {
-            childrenList.value = await $api.dbTableRow.nestedList(
+            result = await $api.dbTableRow.nestedList(
               NOCO,
               meta.value?.base_id ?? ((base?.value?.id || (sharedView.value?.view as any)?.base_id) as string),
               meta.value.id,
@@ -747,6 +851,31 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
               } as any,
             )
           }
+
+          // A newer search superseded this request while it was in flight — drop
+          // the stale response so it can't replace the current term's results.
+          // Return the current list (not undefined) to keep a stable return contract.
+          if (req.isStale()) return childrenList.value
+
+          // Single-target relations (BT / OO / v2 MO-OO) serve the related ROW
+          // itself — or nothing when the cell is empty — instead of a paged
+          // list. Normalize to the paged shape so the pageInfo/list reads
+          // below hold for every relation type.
+          if (!result || !ncIsArray(result.list)) {
+            const single = result && !ncIsEmptyObject(result) ? [result] : []
+            result = {
+              list: single,
+              pageInfo: {
+                isFirstPage: true,
+                isLastPage: true,
+                page: 1,
+                pageSize: single.length,
+                totalRows: single.length,
+              },
+            }
+          }
+
+          childrenList.value = result
         }
         if (ncIsArray(childrenList.value?.list)) {
           childrenList.value.list.forEach((row: Record<string, any>, index: number) => {
@@ -756,7 +885,7 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         }
 
         if (!childrenListPagination.query) {
-          let total = childrenList.value?.pageInfo.totalRows ?? 0
+          let total = childrenList.value?.pageInfo?.totalRows ?? 0
           // Account for queued (deferred, unsaved) link/unlink so the count doesn't revert
           // to the persisted total when the modal is reopened (#14058).
           if (shouldDefer.value && !isNewRow?.value && rowId.value && pendingLtarOps) {
@@ -784,7 +913,10 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       } catch (e: any) {
         message.error(`${t('msg.error.failedToLoadChildrenList')}: ${await extractSdkResponseErrorMsg(e)}`)
       } finally {
-        isChildrenLoading.value = false
+        // Only the request matching the active id owns the loading flag.
+        if (req.isCurrent()) {
+          isChildrenLoading.value = false
+        }
       }
 
       // Seed the pending-links section when (re)opening the child list for an
@@ -1014,15 +1146,25 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         isChildrenListLoading.value[index] = true
         excludedLoadingState.value.set(index, true)
         childrenCachedLoadingState.value.set(index, true)
-        await $api.dbTableRow.nestedRemove(
-          NOCO,
-          metaValue?.base_id ?? (base.value.id as string),
-          metaValue.id!,
-          encodeURIComponent(rowId.value),
-          type.value as RelationTypes,
-          column?.value?.id,
-          encodeURIComponent(getRelatedTableRowId(row) as string),
-        )
+        // Interface pages route through the page-scoped op — grant-authorized
+        // where the raw endpoint 403s for interface collaborators.
+        if (interfaceDataApi?.nestedUnlink) {
+          await interfaceDataApi.nestedUnlink({
+            rowId: rowId.value,
+            columnId: column.value.id,
+            refRowIds: [getRelatedTableRowId(row) as string],
+          })
+        } else {
+          await $api.dbTableRow.nestedRemove(
+            NOCO,
+            metaValue?.base_id ?? (base.value.id as string),
+            metaValue.id!,
+            encodeURIComponent(rowId.value),
+            type.value as RelationTypes,
+            column?.value?.id,
+            encodeURIComponent(getRelatedTableRowId(row) as string),
+          )
+        }
 
         isChildrenExcludedListLinked.value[index] = false
         isChildrenListLinked.value[index] = false
@@ -1066,17 +1208,10 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         }
 
         if (isNewRow?.value || !rowId.value) {
-          // New row: buffered links drive the cell display via row.row.
+          // New row: addLTARRef buffers the link AND mirrors the buffer into
+          // row.row (the cell display + submit source) — a second manual push
+          // here rendered every staged link twice.
           await addLTARRef(row, column.value as ColumnType)
-          const targetRow = rowStoreCurrentRow.value
-          if (isSingleTargetRelation.value) {
-            targetRow.row[column.value.title!] = row
-          } else {
-            if (!Array.isArray(targetRow.row[column.value.title!])) {
-              targetRow.row[column.value.title!] = []
-            }
-            targetRow.row[column.value.title!].push(row)
-          }
         } else {
           // Existing row in the expanded form: queue the link (reconcile auto-cancels a
           // matching pending unlink), then re-derive the cell value/count from persisted +
@@ -1116,15 +1251,25 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         childrenListOffsetCount.value = childrenListOffsetCount.value + 1
         childrenExcludedOffsetCount.value = childrenExcludedOffsetCount.value + 1
 
-        await $api.dbTableRow.nestedAdd(
-          NOCO,
-          metaValue?.base_id ?? (base.value.id as string),
-          metaValue.id as string,
-          encodeURIComponent(rowId.value),
-          type.value as RelationTypes,
-          column?.value?.id,
-          encodeURIComponent(getRelatedTableRowId(row) as string) as string,
-        )
+        // Interface pages route through the page-scoped op — grant-authorized
+        // where the raw endpoint 403s for interface collaborators.
+        if (interfaceDataApi?.nestedLink) {
+          await interfaceDataApi.nestedLink({
+            rowId: rowId.value,
+            columnId: column.value.id,
+            refRowIds: [getRelatedTableRowId(row) as string],
+          })
+        } else {
+          await $api.dbTableRow.nestedAdd(
+            NOCO,
+            metaValue?.base_id ?? (base.value.id as string),
+            metaValue.id as string,
+            encodeURIComponent(rowId.value),
+            type.value as RelationTypes,
+            column?.value?.id,
+            encodeURIComponent(getRelatedTableRowId(row) as string) as string,
+          )
+        }
         // await loadChildrenList()
 
         isChildrenExcludedListLinked.value[index] = true
@@ -1202,6 +1347,15 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
           columnId: column.value.fk_column_id || column.value.id,
           linkRowData: JSON.stringify(linkRowData),
         })
+      } else if (interfaceDataApi?.nestedExcludedList) {
+        // Interface pages — page-scoped picker chunks (see loadChildrenExcludedList).
+        return await interfaceDataApi.nestedExcludedList({
+          rowId: rowId.value,
+          columnId: column.value.id,
+          limit,
+          offset,
+          search: childrenExcludedListPagination.query || undefined,
+        })
       } else {
         let changedRowData
         try {
@@ -1262,9 +1416,13 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       const offset = chunkId * CHUNK_SIZE
       if (offset >= excludedTotalRows.value && excludedTotalRows.value > 0) return
 
+      const req = excludedSearch.track()
       excludedChunkStates.value[chunkId] = 'loading'
       try {
         const result = await _fetchExcludedChunkData(offset, CHUNK_SIZE)
+        // A newer search superseded this request while it was in flight — drop the
+        // stale response so it can't populate the freshly-reset cache.
+        if (req.isStale()) return
         if (result?.list) {
           result.list.forEach((item: Record<string, any>, i: number) => {
             excludedCachedRows.value.set(offset + i, item)
@@ -1277,7 +1435,9 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         }
         excludedChunkStates.value[chunkId] = 'loaded'
       } catch (e: any) {
-        excludedChunkStates.value[chunkId] = undefined
+        if (req.isCurrent()) {
+          excludedChunkStates.value[chunkId] = undefined
+        }
         console.error(`Error fetching excluded chunk ${chunkId}:`, e)
       }
     }
@@ -1288,6 +1448,13 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       excludedLoadingState.value = new Map()
       excludedChunkStates.value = []
       excludedTotalRows.value = 0
+      // Clear the loading flag here too: a superseded request no longer clears it
+      // (its finally is guarded by isCurrent), and a reset can run without a paired
+      // load (e.g. the search input's @change), which would otherwise leave the
+      // spinner stuck. Safe — a stale request won't touch it, and the next load re-sets it.
+      isChildrenExcludedLoading.value = false
+      // Supersede any in-flight requests — their (now stale) responses are dropped.
+      excludedSearch.refresh()
     }
 
     // --- Children (linked items) cache ---
@@ -1318,6 +1485,15 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
           { limit: String(limit), offset: String(offset), where } as any,
           { headers: { 'xc-password': sharedViewPassword.value } },
         )
+      } else if (interfaceDataApi?.nestedList) {
+        // Interface pages — page-scoped linked-record chunks (see loadChildrenList).
+        return await interfaceDataApi.nestedList({
+          rowId: rowId.value,
+          columnId: column.value.id,
+          limit,
+          offset,
+          search: childrenListPagination.query || undefined,
+        })
       } else {
         return await $api.dbTableRow.nestedList(
           NOCO,
@@ -1361,9 +1537,13 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       const offset = chunkId * CHUNK_SIZE
       if (offset >= childrenCachedTotalRows.value && childrenCachedTotalRows.value > 0) return
 
+      const req = childrenSearch.track()
       childrenChunkStates.value[chunkId] = 'loading'
       try {
         const result = await _fetchChildrenChunkData(offset, CHUNK_SIZE)
+        // A newer search superseded this request while it was in flight — drop the
+        // stale response so it can't populate the freshly-reset cache.
+        if (req.isStale()) return
         if (result?.list) {
           result.list.forEach((item: Record<string, any>, i: number) => {
             childrenCachedRows.value.set(offset + i, item)
@@ -1376,7 +1556,9 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
         }
         childrenChunkStates.value[chunkId] = 'loaded'
       } catch (e: any) {
-        childrenChunkStates.value[chunkId] = undefined
+        if (req.isCurrent()) {
+          childrenChunkStates.value[chunkId] = undefined
+        }
         console.error(`Error fetching children chunk ${chunkId}:`, e)
       }
     }
@@ -1388,6 +1570,11 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       childrenChunkStates.value = []
       childrenCachedTotalRows.value = 0
       pendingLinkRows.value = []
+      // Clear the loading flag here too (see resetExcludedCache) so a reset without
+      // a paired load can't leave the spinner stuck.
+      isChildrenLoading.value = false
+      // Supersede any in-flight requests — their (now stale) responses are dropped.
+      childrenSearch.refresh()
     }
 
     const debounceLoadChildrenExcludedList = useDebounceFn(loadChildrenExcludedList, 500)
@@ -1433,7 +1620,65 @@ const [useProvideLTARStore, useLTARStore] = useInjectionState(
       childrenListOffsetCount.value = 0
     }
 
+    // Per-link ordering (v2 mm on Postgres): the NocoDB-managed junction carries
+    // a per-direction Order column, so linked records can be manually arranged.
+    // Only surfaced when the junction actually has the order column
+    // (`fk_mm_child_order_column_id`) AND the source is Postgres — the ordered
+    // read is PG-only, so reordering elsewhere would be a confusing no-op.
+    // Reorder applies to any multi-value junction side (mm, and the "many" side
+    // of a v2 one-to-many) — i.e. not the single-target sides (bt/mo/oo/bt-like).
+    // The junction Order column must exist (only present for v2 mm-like links on
+    // NocoDB-managed sources) and the source must be Postgres (ordered read is
+    // PG-only). v1 hm has no junction/Order column, so it's excluded here anyway.
+    const canReorder = computed(
+      () =>
+        !isSingleTargetRelation.value && !!(colOptions.value as any)?.fk_mm_child_order_column_id && isPg(meta.value?.source_id),
+    )
+
+    // Move `movedRow` before `beforeRow` (both related-table rows), or to the end
+    // when `beforeRow` is null. Extracts the related-table PKs and calls the
+    // per-link reorder endpoint, then reloads the child list so the new order is
+    // reflected. No-op unless `canReorder` (v2 mm on Postgres).
+    const reorderLink = async (
+      movedRow: Record<string, any>,
+      beforeRow: Record<string, any> | null = null,
+      { metaValue = meta.value }: { metaValue?: TableType } = {},
+    ) => {
+      if (!rowId.value || !column.value?.id) return
+
+      const refRowId = getRelatedTableRowId(movedRow)
+      if (refRowId === undefined || refRowId === null) return
+      const before = beforeRow ? getRelatedTableRowId(beforeRow) ?? null : null
+
+      // Route through the internal-operations API — the same channel row reorder
+      // (`dataMove`) uses — rather than the public `/api/v2/tables` REST family,
+      // which isn't exposed to the app on EE/cloud deployments (there the GUI
+      // reaches data via `/api/v1/db/data` and meta via `/api/v2/internal`).
+      await $api.internal.postOperation(
+        (metaValue as any)?.fk_workspace_id,
+        metaValue?.base_id as string,
+        {
+          operation: 'nestedDataReorder',
+          tableId: metaValue?.id,
+          columnId: column.value.id,
+          rowId: rowId.value,
+          refRowId,
+          before,
+        } as any,
+        undefined,
+      )
+
+      $e('a:links:reorder')
+      await loadChildrenList()
+      // Refresh the originating client's grid row (CE path). On EE this is a
+      // no-op and the NocoSocket broadcast from the backend refreshes the canvas
+      // instead — same split as link()/unlink().
+      _reloadData?.({ shouldShowLoading: false, path: path.value })
+    }
+
     return {
+      canReorder,
+      reorderLink,
       relatedTableMeta,
       isLinkedTableAccessible,
       loadRelatedTableMeta,

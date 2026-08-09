@@ -29,6 +29,8 @@ export class CommentsService {
       body: CommentReqType;
       user: UserType;
       req: NcRequest;
+      /** Interface-scoped callers stamp their surface — see `RowCommentEvent.source`. */
+      source?: { interfaceId: string; pageId: string };
     },
   ) {
     validatePayload('swagger.json#/components/schemas/CommentReq', param.body);
@@ -68,6 +70,7 @@ export class CommentsService {
       rowId: param.body.row_id,
       req: param.req,
       context,
+      ...(param.source ? { source: param.source } : {}),
     });
 
     NocoSocket.broadcastEvent(
@@ -163,6 +166,8 @@ export class CommentsService {
       user: UserType;
       body: CommentUpdateReqType;
       req: NcRequest;
+      /** Interface-scoped callers stamp their surface — see `RowCommentEvent.source`. */
+      source?: { interfaceId: string; pageId: string };
     },
   ) {
     validatePayload(
@@ -180,6 +185,12 @@ export class CommentsService {
 
     const res = await Comment.update(context, param.commentId, {
       comment: sanitizedComment,
+      // only overwrite attachments when explicitly provided, so a text-only
+      // edit doesn't wipe existing files
+      ...(param.body.attachments !== undefined
+        ? { attachments: param.body.attachments }
+        : {}),
+      ...(param.body.meta !== undefined ? { meta: param.body.meta } : {}),
     });
 
     const model = await Model.getByIdOrName(context, {
@@ -211,6 +222,7 @@ export class CommentsService {
       rowId: comment.row_id,
       req: param.req,
       context,
+      ...(param.source ? { source: param.source } : {}),
     });
 
     NocoSocket.broadcastEvent(

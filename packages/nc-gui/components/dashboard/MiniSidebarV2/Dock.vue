@@ -49,7 +49,7 @@ const {
   toggleChatPanel,
 } = useChatPanel()
 
-const { blockAiChat, showEEFeatures, isEEFeatureBlocked, showUpgradeToUseBookmarks } = useEeConfig()
+const { blockAiChat, showEEFeatures, isEEFeatureBlocked, showUpgradeToUseBookmarks, hideInterfaces } = useEeConfig()
 
 const isBookmarksFlyoutOpen = ref(false)
 
@@ -122,6 +122,8 @@ const onTabClick = async (tabKey: string) => {
 
   if (tabKey === 'workflows') {
     await navigateTo(`${basePath}/workflows`)
+  } else if (tabKey === 'interfaces') {
+    await navigateTo(`${basePath}/interfaces`)
   } else {
     await navigateTo(basePath)
   }
@@ -152,7 +154,23 @@ const mainItems = computed<NavItem[]>(() => [
     disabled: !hasAvailableBases.value,
     onClick: () => onTabClick('data'),
   },
-  ...(isEeUI && !isMobileMode.value && showEEFeatures.value
+  // Interfaces are paid-only and hidden (not badge-gated) below the tier.
+  ...(showEEFeatures.value && !hideInterfaces.value
+    ? [
+        {
+          key: 'interfaces',
+          icon: 'ncLayout',
+          label: t('general.interfaces'),
+          disabled:
+            !hasAvailableBases.value ||
+            !isUIAllowed('interfaceList', {
+              roles: resolvedProject.value?.project_role || extractBaseRoleFromWorkspaceRole(workspaceRoles.value),
+            }),
+          onClick: () => onTabClick('interfaces'),
+        },
+      ]
+    : []),
+  ...(!isMobileMode.value && showEEFeatures.value
     ? [
         {
           key: 'workflows',
@@ -395,7 +413,7 @@ const handleOpenBookmarkPanel = () => {
     </div>
 
     <!-- Bookmarks -->
-    <div v-if="isEeUI" ref="bookmarksContainerRef" class="relative">
+    <div v-if="showEEFeatures" ref="bookmarksContainerRef" class="relative">
       <div :ref="(el: any) => setItemRef('bookmarks', el)" class="nc-dock-magnify-wrapper" :style="getMagnifyStyle('bookmarks')">
         <DashboardMiniSidebarV2DockItem
           icon="ncBookmark"

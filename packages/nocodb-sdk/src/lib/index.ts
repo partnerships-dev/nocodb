@@ -28,6 +28,7 @@ export * from '~/lib/types';
 export * from '~/lib/bookmark';
 export * from '~/lib/helpers/metaHelpers';
 export * from '~/lib/circularReplacer';
+export * from '~/lib/payment/credits';
 export {
   default as UITypes,
   UITypesName,
@@ -117,7 +118,12 @@ export * from '~/lib/chat';
 export * from '~/lib/v3';
 export * from '~/lib/Document';
 export * from '~/lib/DocumentComment';
+export * from '~/lib/commentAnnotation';
 export * from '~/lib/DocumentRevision';
 export * from '~/lib/docs';
 export * from '~/lib/entityNameValidation';
 export * from '~/lib/smartText';
+export * from '~/lib/snapshotSchedule';
+export * from '~/lib/rls/rls-placeholders';
+export * from '~/lib/interface';
+export * from '~/lib/previewAs';

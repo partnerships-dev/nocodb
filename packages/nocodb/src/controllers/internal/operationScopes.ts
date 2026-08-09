@@ -25,6 +25,7 @@ export const OPERATION_SCOPES = {
 
   // UI Get Operations
   tableGet: 'base',
+  refTableGet: 'base',
   columnsHash: 'base',
   viewList: 'base',
   viewColumnList: 'base',
@@ -32,6 +33,7 @@ export const OPERATION_SCOPES = {
   filterList: 'base',
   filterChildrenList: 'base',
   sortList: 'base',
+  lookupSortList: 'base',
   hookList: 'base',
   hookRead: 'base',
   hookLogList: 'base',
@@ -83,6 +85,7 @@ export const OPERATION_SCOPES = {
   sortCreate: 'base',
   sortUpdate: 'base',
   sortDelete: 'base',
+  lookupSortCreate: 'base',
   hookCreate: 'base',
   hookUpdate: 'base',
   hookDelete: 'base',
@@ -116,6 +119,7 @@ export const OPERATION_SCOPES = {
   nestedDataList: 'base',
   nestedDataLink: 'base',
   nestedDataUnlink: 'base',
+  nestedDataReorder: 'base',
   nestedDataListCopyPasteOrDeleteAll: 'base',
   nestedDataBulkCopyPasteOrDeleteAll: 'base',
   nestedDataBulkLinkByDisplayValue: 'base',

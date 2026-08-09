@@ -308,6 +308,8 @@ import NcAmazonAws from '~icons/nc-icons/amazon_aws'
 // Buttons Icons V2
 
 import NcColumnsIcon from '~icons/nc-icons-v2/columns.svg'
+import NcTabsIcon from '~icons/nc-icons-v2/tabs.svg'
+import NcSquareChevronDownIcon from '~icons/nc-icons-v2/square-chevron-down.svg'
 import NcUnderlineIcon from '~icons/nc-icons-v2/underline.svg'
 import NcGridIcon from '~icons/nc-icons-v2/grid.svg'
 import NcTriangleIcon from '~icons/nc-icons-v2/triangle.svg'
@@ -400,6 +402,9 @@ import NcStopCircleIcon from '~icons/nc-icons-v2/stop-circle.svg'
 import NcLogOutIcon from '~icons/nc-icons-v2/log-out.svg'
 import NcArrowLeftCircleIcon from '~icons/nc-icons-v2/arrow-left-circle.svg'
 import NcBarChart2Icon from '~icons/nc-icons-v2/bar-chart-2.svg'
+import NcDonutChartIcon from '~icons/nc-icons-v2/donut-chart.svg'
+import NcScatterChartIcon from '~icons/nc-icons-v2/scatter-chart.svg'
+import NcTreemapChartIcon from '~icons/nc-icons-v2/treemap-chart.svg'
 import NcGitPullRequestIcon from '~icons/nc-icons-v2/git-pull-request.svg'
 import NcMinimizeIcon from '~icons/nc-icons-v2/minimize.svg'
 import NcMinusSquareIcon from '~icons/nc-icons-v2/minus-square.svg'
@@ -465,11 +470,19 @@ import NcArrowRightCircleIcon from '~icons/nc-icons-v2/arrow-right-circle.svg'
 import NcAlignRightIcon from '~icons/nc-icons-v2/align-right.svg'
 import NcImageIcon from '~icons/nc-icons-v2/image.svg'
 import NcMaximize2Icon from '~icons/nc-icons-v2/maximize-2.svg'
+import NcFullscreenIcon from '~icons/nc-icons-v2/fullscreen.svg'
 import NcCheckCircleIcon from '~icons/nc-icons-v2/check-circle.svg'
 import NcSaveIcon from '~icons/nc-icons-v2/save.svg'
 import NcSmileIcon from '~icons/nc-icons-v2/smile.svg'
 import NcNavigationIcon from '~icons/nc-icons-v2/navigation.svg'
 import NcPaperclipIcon from '~icons/nc-icons-v2/paperclip.svg'
+import NcLucideBold from '~icons/nc-icons-v2/lucide-bold.svg'
+import NcLucideItalic from '~icons/nc-icons-v2/lucide-italic.svg'
+import NcLucideUnderline from '~icons/nc-icons-v2/lucide-underline.svg'
+import NcLucideStrikethrough from '~icons/nc-icons-v2/lucide-strikethrough.svg'
+import NcLucideLink from '~icons/nc-icons-v2/lucide-link.svg'
+import NcLucideAtSign from '~icons/nc-icons-v2/lucide-at-sign.svg'
+import NcLucidePaperclip from '~icons/nc-icons-v2/lucide-paperclip.svg'
 import NcFastForwardIcon from '~icons/nc-icons-v2/fast-forward.svg'
 import NcXSquareIcon from '~icons/nc-icons-v2/x-square.svg'
 import NcAwardIcon from '~icons/nc-icons-v2/award.svg'
@@ -794,6 +807,16 @@ import NcLogoManusIm from '~icons/nc-icons-v2/manus-im.svg'
 import NcLogoHuggingface from '~icons/nc-icons-v2/huggingface-colored.svg'
 import NcLogoReplitAi from '~icons/nc-icons-v2/replit-ai-colored.svg'
 import NcLogoLangchain from '~icons/nc-icons-v2/langchain.svg'
+import NcLogoAlibabaAi from '~icons/nc-icons-v2/alibaba-ai.svg'
+import NcLogoBasetenAi from '~icons/nc-icons-v2/baseten-ai.svg'
+import NcLogoCerebrasAi from '~icons/nc-icons-v2/cerebras-ai.svg'
+import NcLogoCohereAi from '~icons/nc-icons-v2/cohere-ai.svg'
+import NcLogoDeepinfraAi from '~icons/nc-icons-v2/deepinfra-ai.svg'
+import NcLogoFireworksAi from '~icons/nc-icons-v2/fireworks-ai.svg'
+import NcLogoMistralAi from '~icons/nc-icons-v2/mistral-ai.svg'
+import NcLogoTogetherAi from '~icons/nc-icons-v2/together-ai.svg'
+import NcLogoVercelAi from '~icons/nc-icons-v2/vercel-ai.svg'
+import NcLogoXaiAi from '~icons/nc-icons-v2/xai-ai.svg'
 import NcLogoBambooHrColored from '~icons/nc-icons-v2/bamboo-hr-colored.svg'
 import NcLogoDockerColored from '~icons/nc-icons-v2/docker-colored.svg'
 import NcLogoHootsuiteColored from '~icons/nc-icons-v2/hootsuite-colored.svg'
@@ -1389,6 +1412,17 @@ export const iconMap = {
   'claude': h(NcClaude, { stroke: 'transparent' }),
   'ollama': h(NcOllama, { stroke: 'transparent' }),
   'groq': h(NcGroq, { stroke: 'transparent' }),
+  'alibaba': h(NcLogoAlibabaAi, { stroke: 'transparent' }),
+  'baseten': h(NcLogoBasetenAi, { stroke: 'transparent' }),
+  'cerebras': h(NcLogoCerebrasAi, { stroke: 'transparent' }),
+  'cohere': h(NcLogoCohereAi, { stroke: 'transparent' }),
+  'deepinfra': h(NcLogoDeepinfraAi, { stroke: 'transparent' }),
+  'fireworks': h(NcLogoFireworksAi, { stroke: 'transparent' }),
+  'huggingface': h(NcLogoHuggingface, { stroke: 'transparent' }),
+  'mistral': h(NcLogoMistralAi, { stroke: 'transparent' }),
+  'together': h(NcLogoTogetherAi, { stroke: 'transparent' }),
+  'vercel': h(NcLogoVercelAi, { stroke: 'transparent' }),
+  'xai': h(NcLogoXaiAi, { stroke: 'transparent' }),
   'posthog': h(NcPosthog, { stroke: 'transparent' }),
   'nocodbPg': h(NcNocodbPg, { stroke: 'transparent' }),
   'refreshCw': NcRefreshCW,
@@ -1400,6 +1434,8 @@ export const iconMap = {
 
   // Nc-IconsV2 Buttons
   'ncColumns': NcColumnsIcon,
+  'ncTabs': NcTabsIcon,
+  'ncSquareChevronDown': NcSquareChevronDownIcon,
   'ncUnderline': NcUnderlineIcon,
   'ncGrid': NcGridIcon,
   'ncTriangle': NcTriangleIcon,
@@ -1491,6 +1527,9 @@ export const iconMap = {
   'ncLogOut': NcLogOutIcon,
   'ncArrowLeftCircle': NcArrowLeftCircleIcon,
   'ncBarChart2': NcBarChart2Icon,
+  'ncDonutChart': NcDonutChartIcon,
+  'ncScatterChart': NcScatterChartIcon,
+  'ncTreemapChart': NcTreemapChartIcon,
   'ncGitPullRequest': NcGitPullRequestIcon,
   'ncMinimize': NcMinimizeIcon,
   'ncMinusSquare': NcMinusSquareIcon,
@@ -1556,11 +1595,19 @@ export const iconMap = {
   'ncAlignRight': NcAlignRightIcon,
   'ncImage': NcImageIcon,
   'ncMaximize2': NcMaximize2Icon,
+  'ncFullscreen': NcFullscreenIcon,
   'ncCheckCircle': NcCheckCircleIcon,
   'ncSave2': NcSaveIcon,
   'ncSmile': NcSmileIcon,
   'ncNavigation': NcNavigationIcon,
   'ncPaperclip': NcPaperclipIcon,
+  'lucideBold': NcLucideBold,
+  'lucideItalic': NcLucideItalic,
+  'lucideUnderline': NcLucideUnderline,
+  'lucideStrikethrough': NcLucideStrikethrough,
+  'lucideLink': NcLucideLink,
+  'lucideAtSign': NcLucideAtSign,
+  'lucidePaperclip': NcLucidePaperclip,
   'ncFastForward': NcFastForwardIcon,
   'ncXSquare': NcXSquareIcon,
   'ncAward': NcAwardIcon,
@@ -4501,52 +4548,6 @@ export const searchableMap = {
     icon: h(NcLogoZoho, { stroke: 'transparent' }),
     keywords: ['crm', 'business apps', 'collaboration', 'productivity', 'enterprise'],
   },
-  ncLogoBaserowColored: {
-    icon: h(NcLogoBaserowColored, { stroke: 'transparent' }),
-    keywords: ['baserow', 'nocode', 'database', 'table', 'collaboration', 'open-source'],
-  },
-  ncLogoSoftrColored: {
-    icon: h(NcLogoSoftrColored, { stroke: 'transparent' }),
-    keywords: ['softr', 'nocode', 'website', 'app', 'frontend', 'builder'],
-  },
-  ncLogoNotionColored: {
-    icon: h(NcLogoNotionColored, { stroke: 'transparent' }),
-    keywords: ['notion', 'docs', 'wiki', 'notes', 'productivity', 'database', 'collaboration'],
-  },
-  ncLogoCodaColored: {
-    icon: h(NcLogoCodaColored, { stroke: 'transparent' }),
-    keywords: ['coda', 'docs', 'automation', 'spreadsheet', 'teamwork', 'collaboration'],
-  },
-  ncLogoRetoolColored: {
-    icon: h(NcLogoRetoolColored, { stroke: 'transparent' }),
-    keywords: ['retool', 'internal-tools', 'builder', 'frontend', 'admin', 'dashboard', 'crud'],
-  },
-  ncLogoN8nColored: {
-    icon: h(NcLogoN8nColored, { stroke: 'transparent' }),
-    keywords: ['n8n', 'workflow', 'automation', 'integration', 'open-source', 'pipeline'],
-  },
-  ncLogoZapierColored: {
-    icon: h(NcLogoZapierColored, { stroke: 'transparent' }),
-    keywords: ['zapier', 'automation', 'integration', 'workflow', 'task', 'connect'],
-  },
-  ncLogoMakeColored: {
-    icon: h(NcLogoMakeColored, { stroke: 'transparent' }),
-    keywords: ['make', 'automation', 'workflow', 'integration', 'connect', 'nocode'],
-  },
-  ncLogoCrewAi: {
-    icon: h(NcLogoCrewAi, { stroke: 'transparent' }),
-    keywords: [
-      'crew',
-      'crew.ai',
-      'workflow automation',
-      'AI agents',
-      'team collaboration',
-      'autonomous agents',
-      'ai',
-      'nocode',
-      'integration',
-    ],
-  },
   ncLogoManusIm: {
     icon: h(NcLogoManusIm, { stroke: 'transparent' }),
     keywords: [
@@ -4571,21 +4572,6 @@ export const searchableMap = {
       'machine learning',
       'text generation',
       'open source',
-      'integration',
-    ],
-  },
-  ncLogoReplitAi: {
-    icon: h(NcLogoReplitAi, { stroke: 'transparent' }),
-    keywords: [
-      'replit',
-      'replit.ai',
-      'code',
-      'cloud IDE',
-      'developer tools',
-      'generative AI',
-      'ai coding',
-      'automation',
-      'nocode',
       'integration',
     ],
   },
@@ -4623,22 +4609,6 @@ export const searchableMap = {
     icon: h(NcLogoDockerColored, { stroke: 'transparent' }),
     keywords: ['docker', 'containerization', 'devops', 'cloud', 'infrastructure'],
   },
-  ncLogoHootsuiteColored: {
-    icon: h(NcLogoHootsuiteColored, { stroke: 'transparent' }),
-    keywords: ['hootsuite', 'social', 'marketing', 'automation'],
-  },
-  ncLogoGongColored: {
-    icon: h(NcLogoGongColored, { stroke: 'transparent' }),
-    keywords: ['gong', 'revenue', 'analytics', 'sales'],
-  },
-  ncLogoProductBoardColored: {
-    icon: h(NcLogoProductBoardColored, { stroke: 'transparent' }),
-    keywords: ['productboard', 'roadmap', 'feedback', 'planning'],
-  },
-  ncLogoXeroColored: {
-    icon: h(NcLogoXeroColored, { stroke: 'transparent' }),
-    keywords: ['xero', 'accounting', 'finance', 'invoicing'],
-  },
   ncLogoSketchColored: {
     icon: h(NcLogoSketchColored, { stroke: 'transparent' }),
     keywords: ['sketch', 'design', 'ui', 'prototype'],
@@ -4650,10 +4620,6 @@ export const searchableMap = {
   ncLogoPowerLogoColored: {
     icon: h(NcLogoPowerLogoColored, { stroke: 'transparent' }),
     keywords: ['power', 'design', 'logo', 'branding'],
-  },
-  ncLogoClickupColored: {
-    icon: h(NcLogoClickupColored, { stroke: 'transparent' }),
-    keywords: ['clickup', 'tasks', 'collaboration', 'productivity'],
   },
 
   ncBaseOutline: {
@@ -4768,3 +4734,11 @@ export const searchIcons = (searchTerm: string) => {
 }
 
 export type IconMapKey = keyof typeof iconMap
+
+/**
+ * Narrow a persisted icon name (e.g. `base.meta.icon`) to a renderable `iconMap`
+ * key. Returns `undefined` for unset or stale names so callers can fall back.
+ */
+export function resolveIconMapKey(icon?: string): IconMapKey | undefined {
+  return icon && icon in iconMap ? (icon as IconMapKey) : undefined
+}

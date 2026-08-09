@@ -41,6 +41,7 @@ export class DatasService {
       ignoreViewFilterAndSort?: boolean;
       baseModel?: BaseModelSqlv2;
       skipSortBasedOnOrderCol?: boolean;
+      customConditions?: Filter[];
     },
   ) {
     let { model, view } = param as { view?: View; model?: Model };
@@ -90,6 +91,7 @@ export class DatasService {
       includeButtonFilterColumns: param.includeButtonFilterColumns,
       ignoreViewFilterAndSort: param.ignoreViewFilterAndSort,
       baseModel: param.baseModel,
+      customConditions: param.customConditions,
     });
   }
 
@@ -244,6 +246,8 @@ export class DatasService {
       includeRowColorColumns?: boolean;
       includeButtonFilterColumns?: boolean;
       skipSortBasedOnOrderCol?: boolean;
+      /** Serve the system order column (client caches sort live inserts by it). */
+      extractOrderColumn?: boolean;
     },
   ) {
     const {
@@ -277,6 +281,7 @@ export class DatasService {
       includeSortAndFilterColumns: includeSortAndFilterColumns,
       includeRowColorColumns: param.includeRowColorColumns,
       includeButtonFilterColumns: param.includeButtonFilterColumns,
+      extractOrderColumn: param.extractOrderColumn,
       skipSubstitutingColumnIds:
         query?.[QUERY_STRING_FIELD_ID_ON_RESULT] === 'true',
     });
@@ -366,7 +371,7 @@ export class DatasService {
 
   async getDataGroupBy(
     context: NcContext,
-    param: { model: Model; view: View; query?: any },
+    param: { model: Model; view?: View; query?: any },
   ) {
     const { model, view, query = {} } = param;
 
@@ -491,7 +496,8 @@ export class DatasService {
     context: NcContext,
     param: {
       model;
-      view: View;
+      /** Optional — view-less callers (interface pages) scope via query.filterArrJson. */
+      view?: View;
       query: any;
       columnId: string;
     },
@@ -645,6 +651,13 @@ export class DatasService {
       rowId: string;
     },
   ) {
+    // NOTE: view-hidden columns stay queryable here and in the sibling
+    // nested-link methods below — field visibility is the column-level ACL,
+    // not view `show`, so we do NOT strip where/sort just because a column is
+    // hidden in the view (see the DESIGN NOTE in public-datas.service.ts).
+    // The `restrictNestedLinkQueryForColumn` calls below are a SEPARATE
+    // boundary: they gate on cross-base / no-visibility-access related tables,
+    // not on view `show`.
     const view = await View.get(context, param.viewId);
 
     const model = await Model.getByIdOrName(context, {
@@ -739,11 +752,12 @@ export class DatasService {
     });
 
     // Strip caller-supplied where/sort references to columns the link doesn't
-    // expose (cross-base / visibility-limited related tables). The excluded
-    // (link-picker) fetch is `pkAndPvOnly`-restricted just like the linked
-    // list, so an unsanitized predicate on a hidden column is the same one-bit
-    // oracle — over the *unlinked* rows here. Mutates `param.query`, which both
-    // the data fetch and the count read from.
+    // expose (cross-base / visibility-limited related tables — NOT the view-`show`
+    // dimension, which stays queryable). The excluded (link-picker) fetch is
+    // `pkAndPvOnly`-restricted just like the linked list, so an unsanitized
+    // predicate on a non-exposed column is the same one-bit oracle — over the
+    // *unlinked* rows here. Mutates `param.query`, which both the data fetch and
+    // the count read from.
     await restrictNestedLinkQueryForColumn(
       context,
       await Column.get(context, { colId: param.colId }),
@@ -817,11 +831,12 @@ export class DatasService {
     });
 
     // Strip caller-supplied where/sort references to columns the link doesn't
-    // expose (cross-base / visibility-limited related tables). The excluded
-    // (link-picker) fetch is `pkAndPvOnly`-restricted just like the linked
-    // list, so an unsanitized predicate on a hidden column is the same one-bit
-    // oracle — over the *unlinked* rows here. Mutates `param.query`, which both
-    // the data fetch and the count read from.
+    // expose (cross-base / visibility-limited related tables — NOT the view-`show`
+    // dimension, which stays queryable). The excluded (link-picker) fetch is
+    // `pkAndPvOnly`-restricted just like the linked list, so an unsanitized
+    // predicate on a non-exposed column is the same one-bit oracle — over the
+    // *unlinked* rows here. Mutates `param.query`, which both the data fetch and
+    // the count read from.
     await restrictNestedLinkQueryForColumn(
       context,
       await Column.get(context, { colId: param.colId }),
@@ -897,11 +912,12 @@ export class DatasService {
     });
 
     // Strip caller-supplied where/sort references to columns the link doesn't
-    // expose (cross-base / visibility-limited related tables). The excluded
-    // (link-picker) fetch is `pkAndPvOnly`-restricted just like the linked
-    // list, so an unsanitized predicate on a hidden column is the same one-bit
-    // oracle — over the *unlinked* rows here. Mutates `param.query`, which both
-    // the data fetch and the count read from.
+    // expose (cross-base / visibility-limited related tables — NOT the view-`show`
+    // dimension, which stays queryable). The excluded (link-picker) fetch is
+    // `pkAndPvOnly`-restricted just like the linked list, so an unsanitized
+    // predicate on a non-exposed column is the same one-bit oracle — over the
+    // *unlinked* rows here. Mutates `param.query`, which both the data fetch and
+    // the count read from.
     await restrictNestedLinkQueryForColumn(
       context,
       await Column.get(context, { colId: param.colId }),
@@ -977,11 +993,12 @@ export class DatasService {
     const column = await Column.get(context, { colId: param.colId });
 
     // Strip caller-supplied where/sort references to columns the link doesn't
-    // expose (cross-base / visibility-limited related tables). The excluded
-    // (link-picker) fetch is `pkAndPvOnly`-restricted just like the linked
-    // list, so an unsanitized predicate on a hidden column is the same one-bit
-    // oracle — over the *unlinked* rows here. Mutates `param.query`, which both
-    // the data fetch and the count read from.
+    // expose (cross-base / visibility-limited related tables — NOT the view-`show`
+    // dimension, which stays queryable). The excluded (link-picker) fetch is
+    // `pkAndPvOnly`-restricted just like the linked list, so an unsanitized
+    // predicate on a non-exposed column is the same one-bit oracle — over the
+    // *unlinked* rows here. Mutates `param.query`, which both the data fetch and
+    // the count read from.
     await restrictNestedLinkQueryForColumn(context, column, param.query);
 
     const key = 'List';
@@ -1084,8 +1101,9 @@ export class DatasService {
     });
 
     // Strip caller-supplied where/sort references to columns the link doesn't
-    // expose (cross-base / visibility-limited related tables). Mutates
-    // `param.query`, which both the data fetch and the count read from.
+    // expose (cross-base / visibility-limited related tables — NOT the view-`show`
+    // dimension, which stays queryable). Mutates `param.query`, which both the
+    // data fetch and the count read from.
     await restrictNestedLinkQueryForColumn(
       context,
       await Column.get(context, { colId: param.colId }),

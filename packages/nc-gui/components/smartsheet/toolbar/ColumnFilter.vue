@@ -3,7 +3,10 @@ import {
   type ColumnType,
   type FilterType,
   ViewSettingOverrideOptions,
+  getRlsPlaceholdersForColumn,
+  hasRlsPlaceholder,
   isColumnInError,
+  isCreatedOrLastModifiedByCol,
   isCreatedOrLastModifiedTimeCol,
   isHiddenCol,
   isSystemColumn,
@@ -26,6 +29,13 @@ interface Props {
   showDynamicCondition?: boolean
   widget?: boolean
   workflow?: boolean
+  /**
+   * Render the `dynamic-filter` slot in place of the value input, so the parent
+   * supplies the value (RLS `{currentUser.*}` placeholders, workflow variables).
+   * Unlike `workflow`, this only affects the value input — it does not change
+   * which columns are filterable or how filters are loaded.
+   */
+  dynamicValue?: boolean
   draftFilter?: Partial<FilterType>
   isOpen?: boolean
   rootMeta?: any
@@ -59,6 +69,7 @@ const props = withDefaults(defineProps<Props>(), {
   webHook: false,
   link: false,
   workflow: false,
+  dynamicValue: false,
   showDynamicCondition: true,
   linkColId: undefined,
   buttonColId: undefined,
@@ -111,6 +122,7 @@ const {
   buttonColId,
   isButton,
   workflow,
+  dynamicValue,
   parentColId,
   visibilityError,
   disableAddNewFilter,
@@ -203,9 +215,15 @@ const { showSystemFields } =
 const fieldsToFilter = computed(() =>
   deepClone(columns.value)
     .filter((c) => {
+      // "Created by" / "Last modified by" are the natural subject of a row-level
+      // policy, but they are system columns, so the generic branch below would
+      // hide them (RLS pins showSystemFields to false — there is no view to
+      // read the toggle from).
+      const isRlsAllowedSystemCol = !!rlsPolicyId?.value && (isCreatedOrLastModifiedByCol(c) || isCreatedOrLastModifiedTimeCol(c))
+
       if ((link.value || workflow.value) && isSystemColumn(c) && !c.pk && !isCreatedOrLastModifiedTimeCol(c)) return false
 
-      if (!link.value && !webHook.value && !workflow.value && isSystemColumn(c)) {
+      if (!link.value && !webHook.value && !workflow.value && isSystemColumn(c) && !isRlsAllowedSystemCol) {
         if (isHiddenCol(c, meta.value)) return false
         if (!showSystemFields.value) return false
       }
@@ -295,13 +313,32 @@ const isFilterUpdated = computed(() => {
   return _isFilterUpdated.value || localNestedFilters.value.some((filter) => filter?.isFilterUpdated)
 })
 
+// Interface pages: the "view" is synthetic — pin/reorder persist view state
+// that does not exist there, so both affordances are hidden.
+const isInterfacePage = !!inject(InterfacePageDataInj, undefined)
+
+// Interface filter editors flag rows whose stored column id no longer resolves
+// (a deleted field/table) so the builder shows a greyed "orphan" cue instead of
+// a blank picker. Off (default) everywhere else — grid-view filters unaffected.
+const markOrphanFilter = inject(MarkOrphanFilterInj, ref(false))
+
 const isReorderEnabled = computed(() => {
-  return appInfo.value.ee && isViewFilter.value && !isMobileMode.value
+  return appInfo.value.ee && isViewFilter.value && !isMobileMode.value && !isInterfacePage
 })
 
 const getColumn = (filter: Filter) => {
   // extract looked up column if available
   return btLookupTypesMap.value[filter.fk_column_id] || columns.value.find((col: ColumnType) => col.id === filter.fk_column_id)
+}
+
+/**
+ * An interface config filter row whose stored `fk_column_id` no longer resolves
+ * to a live column — the field (or its table) was deleted, leaving a stale id in
+ * the tree. Only flagged when `markOrphanFilter` is provided (interface editors);
+ * a draft row without a column, or any grid-view filter, is never flagged.
+ */
+const isFilterFieldOrphaned = (filter: Filter) => {
+  return markOrphanFilter.value && !filter.is_group && !!filter.fk_column_id && !getColumn(filter)
 }
 
 const filterPrevComparisonOp = ref<Record<string, string>>({})
@@ -673,6 +710,23 @@ const eventBusHandler = async (event) => {
   }
 }
 
+// `dynamic` is not a column on nc_filter_exp, so a saved placeholder comes back
+// with the flag cleared and would render as raw `{currentUser.x}` text. The value
+// is self-describing, so re-derive the flag from it instead.
+watch(
+  filters,
+  (loadedFilters) => {
+    if (!dynamicValue.value || !loadedFilters?.length) return
+
+    for (const filter of loadedFilters) {
+      if (!filter.dynamic && hasRlsPlaceholder(filter.value)) {
+        filter.dynamic = true
+      }
+    }
+  },
+  { immediate: true },
+)
+
 onMounted(async () => {
   eventBus?.on?.(eventBusHandler)
 
@@ -985,6 +1039,13 @@ watch(
 async function resetDynamicField(filter: any, i) {
   filter.dynamic = false
   filter.fk_value_col_id = null
+
+  // `dynamic` is not persisted — in slot mode it is re-derived from the value on
+  // reload, so leaving a placeholder behind would flip the row straight back.
+  if (dynamicValue.value && hasRlsPlaceholder(filter.value)) {
+    filter.value = null
+  }
+
   await saveOrUpdate(filter, i)
 }
 
@@ -1050,8 +1111,29 @@ const dynamicColumns = (filter: FilterType) => {
   })
 }
 
+/**
+ * In slot mode the parent owns the value, so the toggle is only meaningful when
+ * that parent actually has something to offer for this column + operator —
+ * otherwise the user flips to "dynamic" and lands on an empty dropdown.
+ */
+function hasDynamicValueOptions(filter: FilterType) {
+  if (!dynamicValue.value) return true
+
+  return (
+    showFilterInput(filter) &&
+    getRlsPlaceholdersForColumn({
+      uidt: getColumn(filter)?.uidt as UITypes | undefined,
+      comparisonOp: filter.comparison_op,
+    }).length > 0
+  )
+}
+
 const changeToDynamic = async (filter, i) => {
-  filter.dynamic = isDynamicFilterAllowed(filter) && showFilterInput(filter)
+  // `isDynamicFilterAllowed` exists for field-to-field comparison — it enforces
+  // abstract-type compatibility and excludes the `anyof` family. In slot mode
+  // the parent supplies the value, so the only requirement is that the row has
+  // a value input to replace.
+  filter.dynamic = dynamicValue.value ? showFilterInput(filter) : isDynamicFilterAllowed(filter) && showFilterInput(filter)
   await saveOrUpdate(filter, i)
 }
 
@@ -1237,6 +1319,7 @@ defineExpose({
                   :is-button="isButton"
                   :widget-id="widgetId"
                   :workflow="workflow"
+                  :dynamic-value="dynamicValue"
                   :widget="widget"
                   :parent-col-id="parentColId"
                   :filter-option="filterOption"
@@ -1247,6 +1330,11 @@ defineExpose({
                   :is-temp-filters="isTempFilters"
                   :hide-checkbox="hideCheckbox"
                 >
+                  <!-- forward so filters inside a nested group get the same value input -->
+                  <template #dynamic-filter="slotProps">
+                    <slot name="dynamic-filter" v-bind="slotProps" />
+                  </template>
+
                   <template #start>
                     <NcCheckbox
                       v-if="appInfo.ee && !hideCheckbox"
@@ -1408,8 +1496,19 @@ defineExpose({
                   {{ $t('title.fieldInaccessible') }}
                 </NcTooltip>
 
+                <NcTooltip
+                  v-if="isFilterFieldOrphaned(filter)"
+                  class="xs:col-span-9 flex-1 flex items-center gap-2 px-2 !text-nc-content-gray-muted cursor-default"
+                >
+                  <template #title>{{ $t('msg.info.interfaceFilterFieldOrphaned') }}</template>
+                  <span class="flex items-center gap-2 min-w-0" data-testid="nc-filter-orphan-field">
+                    <GeneralIcon icon="alertTriangle" class="flex-none opacity-70" />
+                    <span class="truncate">{{ $t('labels.multiField.deletedField') }}</span>
+                  </span>
+                </NcTooltip>
+
                 <SmartsheetToolbarFieldListAutoCompleteDropdown
-                  v-if="!isFormFieldInaccessible(filter)"
+                  v-if="!isFormFieldInaccessible(filter) && !isFilterFieldOrphaned(filter)"
                   :key="`${i}_6`"
                   v-model="filter.fk_column_id"
                   :class="{
@@ -1426,7 +1525,7 @@ defineExpose({
                 />
 
                 <NcSelect
-                  v-if="!isFormFieldInaccessible(filter)"
+                  v-if="!isFormFieldInaccessible(filter) && !isFilterFieldOrphaned(filter)"
                   v-model:value="filter.comparison_op"
                   v-e="['c:filter:comparison-op:select', { link: !!link, webHook: !!webHook }]"
                   :dropdown-match-select-width="false"
@@ -1463,12 +1562,18 @@ defineExpose({
 
               <NcWrap :wrap="!!isMobileMode" class="grid grid-cols-12 gap-x-0 flex-1 min-h-8 nc-filter-wrapper">
                 <div
-                  v-if="!isFormFieldInaccessible(filter) && ['blank', 'notblank'].includes(filter.comparison_op)"
+                  v-if="
+                    !isFormFieldInaccessible(filter) &&
+                    !isFilterFieldOrphaned(filter) &&
+                    ['blank', 'notblank'].includes(filter.comparison_op)
+                  "
                   class="xs:col-span-3 sm:(flex flex-grow)"
                 ></div>
 
                 <NcSelect
-                  v-else-if="!isFormFieldInaccessible(filter) && isDateType(types[filter.fk_column_id])"
+                  v-else-if="
+                    !isFormFieldInaccessible(filter) && !isFilterFieldOrphaned(filter) && isDateType(types[filter.fk_column_id])
+                  "
                   v-model:value="filter.comparison_sub_op"
                   v-e="['c:filter:sub-comparison-op:select', { link: !!link, webHook: !!webHook }]"
                   :dropdown-match-select-width="false"
@@ -1506,6 +1611,7 @@ defineExpose({
                   </template>
                 </NcSelect>
                 <div
+                  v-if="!isFilterFieldOrphaned(filter)"
                   class="flex items-center flex-grow min-w-0 empty:!hidden"
                   :class="{
                     'xs:(col-span-6)':
@@ -1530,7 +1636,7 @@ defineExpose({
                       @change="saveOrUpdate(filter, getFilterIndex(filter))"
                     />
                   </div>
-                  <template v-else-if="workflow && filter.dynamic">
+                  <template v-else-if="(workflow || dynamicValue) && filter.dynamic">
                     <slot
                       name="dynamic-filter"
                       :filter="filter"
@@ -1562,7 +1668,7 @@ defineExpose({
 
                     <div v-else-if="!isDateType(types[filter.fk_column_id])" class="flex-grow"></div>
                   </template>
-                  <template v-if="workflow && showDynamicCondition">
+                  <template v-if="(workflow || dynamicValue) && showDynamicCondition && hasDynamicValueOptions(filter)">
                     <NcDropdown
                       class="nc-settings-dropdown h-full flex items-center min-w-0 rounded-lg"
                       :trigger="['click']"
@@ -1727,7 +1833,8 @@ defineExpose({
                     !webHook &&
                     !link &&
                     !widget &&
-                    !isList
+                    !isList &&
+                    !isInterfacePage
                   "
                 >
                   <template #title>

@@ -111,6 +111,7 @@ export class UiPostOperations
     'sortCreate' as const,
     'sortUpdate' as const,
     'sortDelete' as const,
+    'lookupSortCreate' as const,
     'hookCreate' as const,
     'hookUpdate' as const,
     'hookDelete' as const,
@@ -138,6 +139,7 @@ export class UiPostOperations
     'ganttViewUpdate' as const,
     'nestedDataLink' as const,
     'nestedDataUnlink' as const,
+    'nestedDataReorder' as const,
     'nestedDataListCopyPasteOrDeleteAll' as const,
     'nestedDataBulkCopyPasteOrDeleteAll' as const,
     'nestedDataBulkLinkByDisplayValue' as const,
@@ -402,6 +404,12 @@ export class UiPostOperations
           sortId: req.query.sortId,
           req,
         });
+      case 'lookupSortCreate':
+        return await this.sortsService.lookupSortCreate(context, {
+          columnId: req.query.columnId,
+          sort: payload,
+          req,
+        });
       case 'hookCreate':
         return await this.hooksService.hookCreate(context, {
           tableId: req.query.tableId,
@@ -552,6 +560,18 @@ export class UiPostOperations
           viewId: req.query.viewId as string,
           columnId: req.query.columnId as string,
           refRowIds: payload,
+          cookie: req,
+          user: req.user,
+        });
+      case 'nestedDataReorder':
+        return await this.dataTableService.nestedReorder(context, {
+          modelId: req.query.tableId as string,
+          rowId: req.query.rowId as string,
+          query: req.query,
+          viewId: req.query.viewId as string,
+          columnId: req.query.columnId as string,
+          refRowId: req.query.refRowId as string,
+          before: (req.query.before as string) ?? null,
           cookie: req,
           user: req.user,
         });

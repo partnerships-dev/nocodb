@@ -470,7 +470,7 @@ const isMmTable = computed(() => !!table.value?.mm)
     :data-order="table.order"
     :data-id="table.id"
     :data-table-id="table.id"
-    :class="[`nc-base-tree-tbl nc-base-tree-tbl-${table.title?.replaceAll(' ', '')}`]"
+    :class="[`nc-base-tree-tbl nc-base-tree-tbl-${toSafeClassName(table.title)}`]"
     :data-active="openedTableId === table.id"
   >
     <div class="flex items-center py-0.5">
@@ -513,7 +513,7 @@ const isMmTable = computed(() => !!table.value?.mm)
                   :class="{ '!rotate-90': isExpanded }"
                 />
               </div>
-              <div v-if="!table.isViewsLoading" class="flex items-center nc-table-icon-wrapper min-w-6 relative" @click.stop>
+              <div v-if="!table.isViewsLoading" class="flex items-center nc-table-icon-wrapper min-w-6 h-6 relative" @click.stop>
                 <!-- Desktop: combo chevron overlay -->
                 <NcButton
                   v-e="['c:table:toggle-expand']"
