@@ -67,7 +67,7 @@ const baseDevConfig = {
       configFile: resolve('tsconfig.json'),
     },
     alias: {
-      '@noco-local-integrations': resolve(__dirname, '../noco-integrations/packages'),
+      '@noco-local-integrations': resolve(__dirname, '../noco-integrations'),
     },
   },
   optimization: {
