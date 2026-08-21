@@ -5694,7 +5694,7 @@
       "planChangeReverted": "Scheduled plan change reverted. Your current plan continues unchanged."
     },
     "subText": {
-      "startFromScratch": "Start from scratch.",
+      "startFromScratch": "Start From Scratch.",
       "importData": "From files & external sources.",
       "connectExternalData": "In realtime to external databases.",
       "syncData": "With internal or external sources",
