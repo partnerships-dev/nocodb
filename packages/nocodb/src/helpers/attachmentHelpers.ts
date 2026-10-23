@@ -134,7 +134,7 @@ export function validateAndNormaliseLocalPath(
 ): string {
   fileOrFolderPath = slash(fileOrFolderPath);
 
-  const toolDir = getToolDir();
+  const toolDir = slash(getToolDir());
 
   // Get the absolute path to the base directory
   const absoluteBasePath = path.resolve(toolDir, 'nc');
